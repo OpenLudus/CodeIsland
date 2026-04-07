@@ -4,6 +4,9 @@ set -e
 APP_NAME="CodeIsland"
 BUILD_DIR=".build/release"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+ICON_CATALOG="Assets.xcassets"
+ICON_SOURCE="AppIcon.icon"
+ICON_INFO_PLIST=".build/AppIcon.partial.plist"
 
 echo "Building $APP_NAME (universal)..."
 swift build -c release --arch arm64
@@ -25,25 +28,20 @@ lipo -create "$ARM_DIR/codeisland-bridge" "$X86_DIR/codeisland-bridge" \
      -output "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"
 cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
 
-# Generate app icon if not cached
-if [ ! -f ".build/CodeIsland.icns" ]; then
-    echo "Generating app icon..."
-    ICONSET=".build/CodeIsland.iconset"
-    mkdir -p "$ICONSET"
-    # Use rsvg-convert to preserve transparency (qlmanage fills transparent areas with white)
-    if command -v rsvg-convert >/dev/null 2>&1; then
-        rsvg-convert -w 1024 -h 1024 logo.svg -o .build/logo.svg.png
-    else
-        qlmanage -t -s 1024 -o .build/ logo.svg 2>/dev/null
-    fi
-    for size in 16 32 128 256 512; do
-        sips -z $size $size ".build/logo.svg.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1
-        double=$((size * 2))
-        sips -z $double $double ".build/logo.svg.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1
-    done
-    iconutil -c icns "$ICONSET" -o .build/CodeIsland.icns
-fi
-cp .build/CodeIsland.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+echo "Compiling app icon assets..."
+xcrun actool \
+    --output-format human-readable-text \
+    --warnings \
+    --errors \
+    --notices \
+    --platform macosx \
+    --target-device mac \
+    --minimum-deployment-target 14.0 \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$ICON_INFO_PLIST" \
+    --compile "$APP_BUNDLE/Contents/Resources" \
+    "$ICON_CATALOG" \
+    "$ICON_SOURCE"
 
 # Copy SPM resource bundles — place at .app root where Bundle.module expects them
 for bundle in .build/*/release/*.bundle; do

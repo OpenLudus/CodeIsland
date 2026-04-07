@@ -11,8 +11,8 @@ class SettingsWindowController {
     func show() {
         // Switch to regular activation policy so the window can receive focus
         NSApp.setActivationPolicy(.regular)
-        // Set Dock icon from AppLogoView
-        NSApp.applicationIconImage = Self.renderAppIcon()
+        // Use the actual bundle app icon so Dock matches the packaged asset catalog icon.
+        NSApp.applicationIconImage = Self.bundleAppIcon()
 
         if let window = window {
             window.makeKeyAndOrderFront(nil)
@@ -58,15 +58,9 @@ class SettingsWindowController {
         self.window = window
     }
 
-    @MainActor
-    static func renderAppIcon() -> NSImage {
-        let size: CGFloat = 256
-        let view = AppLogoView(size: size)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        if let cgImage = renderer.cgImage {
-            return NSImage(cgImage: cgImage, size: NSSize(width: size, height: size))
-        }
-        return NSImage()
+    static func bundleAppIcon() -> NSImage {
+        let image = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        image.size = NSSize(width: 256, height: 256)
+        return image
     }
 }

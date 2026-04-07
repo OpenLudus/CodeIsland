@@ -16,8 +16,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableAutomaticTermination("CodeIsland must stay running")
         ProcessInfo.processInfo.disableSuddenTermination()
-        // Pre-set app icon so Dock/menu bar always use our logo
-        NSApp.applicationIconImage = SettingsWindowController.renderAppIcon()
+        // Pre-set app icon so Dock/menu bar use the packaged bundle icon.
+        NSApp.applicationIconImage = SettingsWindowController.bundleAppIcon()
         if ConfigInstaller.install() {
             Self.log.info("Hooks installed")
         } else {
