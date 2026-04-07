@@ -171,6 +171,15 @@ final class L10n: ObservableObject {
         "no_update_title": "Up to Date",
         "no_update_body": "CodeIsland %@ is the latest version.",
         "ok": "OK",
+        "update_now": "Update Now",
+        "update_downloading": "Downloading update...",
+        "update_failed_title": "Update Failed",
+        "update_failed_body": "Could not install the update: %@",
+        "update_manual_download": "Download Manually",
+        "update_homebrew_title": "Update Available",
+        "update_homebrew_body": "CodeIsland %@ is available. Since you installed via Homebrew, please run:",
+        "update_homebrew_command": "brew upgrade codeisland",
+        "update_copy_command": "Copy Command",
 
         // NotchPanel
         "mute": "Mute",
@@ -337,6 +346,15 @@ final class L10n: ObservableObject {
         "no_update_title": "已是最新版本",
         "no_update_body": "CodeIsland %@ 已是最新版本。",
         "ok": "好",
+        "update_now": "立即更新",
+        "update_downloading": "正在下载更新...",
+        "update_failed_title": "更新失败",
+        "update_failed_body": "无法安装更新：%@",
+        "update_manual_download": "手动下载",
+        "update_homebrew_title": "发现新版本",
+        "update_homebrew_body": "CodeIsland %@ 已发布。由于您通过 Homebrew 安装，请运行：",
+        "update_homebrew_command": "brew upgrade codeisland",
+        "update_copy_command": "复制命令",
 
         // NotchPanel
         "mute": "静音",

@@ -758,7 +758,7 @@ private struct AboutPage: View {
                 VStack(spacing: 6) {
                     Text("CodeIsland")
                         .font(.system(size: 26, weight: .bold))
-                    Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                    Text("Version \(AppVersion.current)")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
@@ -775,6 +775,28 @@ private struct AboutPage: View {
                 HStack(spacing: 12) {
                     aboutLink("GitHub", icon: "chevron.left.forwardslash.chevron.right", url: "https://github.com/wxtsky/CodeIsland")
                     aboutLink("Issues", icon: "ladybug", url: "https://github.com/wxtsky/CodeIsland/issues")
+                }
+
+                Button {
+                    UpdateChecker.shared.checkForUpdates(silent: false)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11))
+                        Text(l10n["check_for_updates"])
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    )
+                }
+                .buttonStyle(.plain)
+                .onHover { h in
+                    if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
                 }
             }
             .frame(maxWidth: .infinity)

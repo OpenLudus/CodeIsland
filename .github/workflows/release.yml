@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      # Uncomment and configure the following steps to enable code signing:
+      # - name: Import code signing certificate
+      #   env:
+      #     CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
+      #     CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      #   run: |
+      #     echo "$CERTIFICATE_P12_BASE64" | base64 --decode > certificate.p12
+      #     security create-keychain -p "" build.keychain
+      #     security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+      #     security list-keychains -s build.keychain
+      #     security default-keychain -s build.keychain
+      #     security unlock-keychain -p "" build.keychain
+      #     security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build DMG
+        run: ./scripts/build-dmg.sh "$VERSION"
+
+      - name: Extract release notes
+        run: ./scripts/extract-changelog.sh "$VERSION" > release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: .build/CodeIsland.dmg
+
+  update-homebrew:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Download DMG from release
+        run: |
+          curl -L \
+            "https://github.com/wxtsky/CodeIsland/releases/download/v${VERSION}/CodeIsland.dmg" \
+            -o CodeIsland.dmg
+
+      - name: Compute SHA256
+        run: echo "SHA256=$(sha256sum CodeIsland.dmg | awk '{print $1}')" >> $GITHUB_ENV
+
+      - name: Clone homebrew-tap
+        run: |
+          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/wxtsky/homebrew-tap.git" homebrew-tap
+
+      - name: Update Cask formula
+        run: |
+          mkdir -p homebrew-tap/Casks
+          cat > homebrew-tap/Casks/codeisland.rb <<'CASK_EOF'
+          cask "codeisland" do
+            version "VERSION_PLACEHOLDER"
+            sha256 "SHA256_PLACEHOLDER"
+
+            url "https://github.com/wxtsky/CodeIsland/releases/download/v#{version}/CodeIsland.dmg"
+            name "CodeIsland"
+            desc "Menu bar companion for Claude Code, Codex, Gemini CLI and more"
+            homepage "https://github.com/wxtsky/CodeIsland"
+
+            app "CodeIsland.app"
+
+            zap trash: [
+              "~/.codeisland",
+            ]
+          end
+          CASK_EOF
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" homebrew-tap/Casks/codeisland.rb
+          sed -i "s/SHA256_PLACEHOLDER/${SHA256}/" homebrew-tap/Casks/codeisland.rb
+          sed -i 's/^          //' homebrew-tap/Casks/codeisland.rb
+
+      - name: Commit and push to homebrew-tap
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/codeisland.rb
+          git commit -m "Update codeisland to ${VERSION}"
+          git push

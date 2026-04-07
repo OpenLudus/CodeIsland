@@ -1,6 +1,15 @@
 import AppKit
 import ServiceManagement
 
+enum AppVersion {
+    /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
+    static let fallback = "1.0.7"
+
+    static var current: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
+    }
+}
+
 enum SettingsKey {
     // Language
     static let appLanguage = "appLanguage"                 // "system", "en", "zh"
