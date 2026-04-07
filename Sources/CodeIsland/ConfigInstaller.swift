@@ -1,5 +1,15 @@
 import Foundation
 
+// MARK: - Hook Identifiers
+
+private enum HookId {
+    static let current = "codeisland"
+    static let legacy = "vibenotch"
+    static func isOurs(_ s: String) -> Bool {
+        s.contains(current) || s.contains(legacy)
+    }
+}
+
 // MARK: - CLI Definitions
 
 /// Hook entry format variants
@@ -431,7 +441,7 @@ struct ConfigInstaller {
         }
         if alreadyInstalled && !hasStaleAsyncKey(hooks) { return true }
 
-        for (event, timeout, isAsync) in cli.events {
+        for (event, timeout, _) in cli.events {
             var eventHooks = hooks[event] as? [[String: Any]] ?? []
             eventHooks.removeAll { containsOurHook($0) }
 
@@ -589,12 +599,11 @@ struct ConfigInstaller {
         if let hookList = entry["hooks"] as? [[String: Any]] {
             return hookList.contains {
                 let cmd = $0["command"] as? String ?? ""
-                return cmd.contains("codeisland") || cmd.contains("vibenotch")
+                return HookId.isOurs(cmd)
             }
         }
         // Flat format: entry.command
-        if let cmd = entry["command"] as? String,
-           (cmd.contains("codeisland") || cmd.contains("vibenotch")) { return true }
+        if let cmd = entry["command"] as? String, HookId.isOurs(cmd) { return true }
         return false
     }
 
@@ -689,7 +698,7 @@ struct ConfigInstaller {
         }
         var plugins = config["plugin"] as? [String] ?? []
         // Remove old vibe-island entries and any stale codeisland entries
-        plugins.removeAll { $0.contains("vibe-island") || $0.contains("codeisland") }
+        plugins.removeAll { $0.contains("vibe-island") || $0.contains(HookId.current) }
         plugins.append(pluginRef)
         config["plugin"] = plugins
         if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
@@ -704,7 +713,7 @@ struct ConfigInstaller {
         guard let data = fm.contents(atPath: opencodeConfigPath),
               var config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var plugins = config["plugin"] as? [String] else { return }
-        plugins.removeAll { $0.contains("codeisland") }
+        plugins.removeAll { $0.contains(HookId.current) }
         config["plugin"] = plugins.isEmpty ? nil : plugins
         if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
             fm.createFile(atPath: opencodeConfigPath, contents: data)
@@ -719,7 +728,7 @@ struct ConfigInstaller {
               let data = fm.contents(atPath: opencodeConfigPath),
               let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let plugins = config["plugin"] as? [String] else { return false }
-        guard plugins.contains(where: { $0.contains("codeisland") }) else { return false }
+        guard plugins.contains(where: { $0.contains(HookId.current) }) else { return false }
         // Check version: if installed plugin is outdated, report as not installed to trigger update
         if let existing = fm.contents(atPath: opencodePluginPath),
            let str = String(data: existing, encoding: .utf8) {

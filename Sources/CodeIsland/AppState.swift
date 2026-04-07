@@ -79,14 +79,11 @@ final class AppState {
         //    - running/processing with a tool: 3 minutes (long build, deep thinking)
         //    Skip sessions with a live process monitor for the long timeout.
         for (key, session) in sessions where session.status != .idle && session.status != .waitingApproval && session.status != .waitingQuestion {
+            if processMonitors[key] != nil { continue }
             let elapsed = -session.lastActivity.timeIntervalSinceNow
-            if session.status == .processing && session.currentTool == nil && elapsed > 60 {
-                if processMonitors[key] != nil { continue }
-                sessions[key]?.status = .idle
-                sessions[key]?.currentTool = nil
-                sessions[key]?.toolDescription = nil
-            } else if elapsed > 180 {
-                if processMonitors[key] != nil { continue }
+            let shouldReset = (session.status == .processing && session.currentTool == nil && elapsed > 60)
+                || elapsed > 180
+            if shouldReset {
                 sessions[key]?.status = .idle
                 sessions[key]?.currentTool = nil
                 sessions[key]?.toolDescription = nil
@@ -414,8 +411,8 @@ final class AppState {
             sessions[sessionId] = SessionSnapshot()
         }
 
-        let wasWaiting = sessions[sessionId]?.status == .waitingApproval
-            || sessions[sessionId]?.status == .waitingQuestion
+        let prevStatus = sessions[sessionId]?.status
+        let wasWaiting = prevStatus == .waitingApproval || prevStatus == .waitingQuestion
 
         let effects = reduceEvent(sessions: &sessions, event: event, maxHistory: maxHistory)
 
@@ -718,14 +715,14 @@ final class AppState {
 
     /// Called when the bridge socket disconnects — the question/permission was answered externally (e.g. user replied in terminal)
     func handlePeerDisconnect(sessionId: String) {
-        let hadPending = !questionQueue.filter({ $0.event.sessionId == sessionId }).isEmpty
-            || !permissionQueue.filter({ $0.event.sessionId == sessionId }).isEmpty
+        let hadPending = questionQueue.contains(where: { $0.event.sessionId == sessionId })
+            || permissionQueue.contains(where: { $0.event.sessionId == sessionId })
         guard hadPending else { return }
 
         drainQuestions(forSession: sessionId)
         drainPermissions(forSession: sessionId)
-        if sessions[sessionId]?.status == .waitingApproval
-            || sessions[sessionId]?.status == .waitingQuestion {
+        let currentStatus = sessions[sessionId]?.status
+        if currentStatus == .waitingApproval || currentStatus == .waitingQuestion {
             sessions[sessionId]?.status = .processing
             sessions[sessionId]?.currentTool = nil
             sessions[sessionId]?.toolDescription = nil
@@ -903,10 +900,10 @@ final class AppState {
         // Restore persisted sessions before process scan (deduped by scan)
         restoreSessions()
 
-        // Initial scan for already-running sessions (Claude + Codex)
+        // Initial scan for already-running sessions (Claude + Codex), respecting user toggles
         Task.detached {
-            let claudeSessions = Self.findActiveClaudeSessions()
-            let codexSessions = Self.findActiveCodexSessions()
+            let claudeSessions = ConfigInstaller.isEnabled(source: "claude") ? Self.findActiveClaudeSessions() : []
+            let codexSessions = ConfigInstaller.isEnabled(source: "codex") ? Self.findActiveCodexSessions() : []
             await MainActor.run { [weak self] in
                 self?.integrateDiscovered(claudeSessions)
                 self?.integrateDiscovered(codexSessions)
@@ -955,8 +952,8 @@ final class AppState {
             guard Date().timeIntervalSince(self.lastFSScanTime) > 3 else { return }
             self.lastFSScanTime = Date()
             Task.detached {
-                let claudeSessions = Self.findActiveClaudeSessions()
-                let codexSessions = Self.findActiveCodexSessions()
+                let claudeSessions = ConfigInstaller.isEnabled(source: "claude") ? Self.findActiveClaudeSessions() : []
+                let codexSessions = ConfigInstaller.isEnabled(source: "codex") ? Self.findActiveCodexSessions() : []
                 await MainActor.run { [weak self] in
                     self?.integrateDiscovered(claudeSessions)
                     self?.integrateDiscovered(codexSessions)

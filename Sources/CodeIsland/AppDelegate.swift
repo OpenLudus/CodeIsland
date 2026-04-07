@@ -10,6 +10,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hookServer: HookServer?
     private var hookRecoveryTimer: Timer?
     private var lastHookCheck: Date = .distantPast
+    private var globalShortcutMonitor: Any?
+    private var localShortcutMonitor: Any?
 
     let appState = AppState()
 
@@ -71,6 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         SoundManager.shared.playBoot()
+        setupGlobalShortcut()
 
         // Boot animation: brief expand to confirm app is running
         Task { @MainActor in
@@ -90,9 +93,80 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hookRecoveryTimer?.invalidate()
+        teardownGlobalShortcut()
         appState.saveSessions()
         hookServer?.stop()
         appState.stopSessionDiscovery()
+    }
+
+    // MARK: - Global Shortcuts
+
+    func setupGlobalShortcut() {
+        teardownGlobalShortcut()
+
+        // Collect all enabled shortcut bindings, skip duplicates (first wins)
+        var bindings: [(keyCode: UInt16, mods: NSEvent.ModifierFlags, action: ShortcutAction)] = []
+        var seen: Set<String> = []
+        for action in ShortcutAction.allCases {
+            guard action.isEnabled else { continue }
+            let b = action.binding
+            let key = "\(b.keyCode)-\(b.modifiers.rawValue)"
+            guard seen.insert(key).inserted else { continue }
+            bindings.append((b.keyCode, b.modifiers, action))
+        }
+        guard !bindings.isEmpty else { return }
+
+        let handler: (NSEvent) -> Bool = { [weak self] event in
+            let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            for b in bindings where event.keyCode == b.keyCode && eventMods == b.mods {
+                Task { @MainActor in self?.executeShortcut(b.action) }
+                return true
+            }
+            return false
+        }
+
+        globalShortcutMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            _ = handler(event)
+        }
+        localShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handler(event) ? nil : event
+        }
+    }
+
+    private func teardownGlobalShortcut() {
+        if let m = globalShortcutMonitor { NSEvent.removeMonitor(m) }
+        if let m = localShortcutMonitor { NSEvent.removeMonitor(m) }
+        globalShortcutMonitor = nil
+        localShortcutMonitor = nil
+    }
+
+    private func executeShortcut(_ action: ShortcutAction) {
+        switch action {
+        case .togglePanel:
+            if appState.surface.isExpanded {
+                withAnimation(NotchAnimation.close) { appState.surface = .collapsed }
+            } else {
+                withAnimation(NotchAnimation.open) {
+                    appState.surface = .sessionList
+                    appState.cancelCompletionQueue()
+                    if appState.activeSessionId == nil {
+                        appState.activeSessionId = appState.sessions.keys.sorted().first
+                    }
+                }
+            }
+        case .approve:
+            appState.approvePermission()
+        case .approveAlways:
+            appState.approvePermission(always: true)
+        case .deny:
+            appState.denyPermission()
+        case .skipQuestion:
+            appState.skipQuestion()
+        case .jumpToTerminal:
+            if let id = appState.activeSessionId, let session = appState.sessions[id] {
+                TerminalActivator.activate(session: session, sessionId: id)
+            }
+        }
     }
 
     private func checkAndRepairHooks() {

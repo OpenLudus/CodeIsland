@@ -1002,57 +1002,6 @@ private struct ThinScrollView<Content: View>: NSViewRepresentable {
     }
 }
 
-private struct SessionIdCopyButton: View {
-    let sessionId: String
-    var fontSize: CGFloat = 10
-
-    @State private var hovering = false
-    @State private var copied = false
-    @State private var resetTask: Task<Void, Never>?
-
-    private var compactLabel: String {
-        "#\(shortSessionId(sessionId))"
-    }
-
-    var body: some View {
-        Button(action: copySessionId) {
-            HStack(spacing: 4) {
-                Text(compactLabel)
-                    .font(.system(size: fontSize, weight: .medium, design: .monospaced))
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: max(8, fontSize - 1), weight: .semibold))
-            }
-            .foregroundStyle(copied ? Color(red: 0.3, green: 0.85, blue: 0.4) : .white.opacity(hovering ? 0.68 : 0.42))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.white.opacity(hovering || copied ? 0.08 : 0.001))
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { h in
-            withAnimation(NotchAnimation.micro) { hovering = h }
-        }
-        .onDisappear {
-            resetTask?.cancel()
-        }
-        .help("\(L10n.shared["copy_session_id"]) \(sessionId)")
-    }
-
-    private func copySessionId() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(sessionId, forType: .string)
-        copied = true
-        resetTask?.cancel()
-        resetTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard !Task.isCancelled else { return }
-            copied = false
-        }
-    }
-}
-
 private struct SessionIdentityLine: View {
     let session: SessionSnapshot
     let sessionId: String
@@ -1088,17 +1037,15 @@ private struct SessionIdentityLine: View {
                     .font(.system(size: sessionFontSize, weight: .semibold, design: .monospaced))
                     .foregroundStyle(dividerColor)
 
-                SessionIdCopyButton(
-                    sessionId: displaySessionId,
-                    fontSize: sessionFontSize
-                )
-                .fixedSize()
+                Text("#\(shortSessionId(displaySessionId))")
+                    .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
+                    .foregroundStyle(sessionColor.opacity(0.6))
+                    .fixedSize()
             } else {
-                SessionIdCopyButton(
-                    sessionId: displaySessionId,
-                    fontSize: sessionFontSize
-                )
-                .fixedSize()
+                Text("#\(shortSessionId(displaySessionId))")
+                    .font(.system(size: sessionFontSize, weight: .medium, design: .monospaced))
+                    .foregroundStyle(sessionColor.opacity(0.6))
+                    .fixedSize()
             }
         }
     }
