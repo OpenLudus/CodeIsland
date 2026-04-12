@@ -36,7 +36,14 @@ function statusClass(evt) {
 function connect() {
   const es = new EventSource('/api/events/stream');
   es.addEventListener('init', (e) => {
-    JSON.parse(e.data).reverse().forEach(renderEvent);
+    // Process init events in CHRONOLOGICAL order so that:
+    //  - tool row merging (PreToolUse → PostToolUse) sees Pre before Post
+    //  - maybeInsertTurnSeparator's lookup for UserPromptSubmit always finds it
+    //  - buildSessionMap's state machine replays forward correctly
+    // Each renderEvent still prepends to the feed, so the final DOM order is
+    // newest-on-top, which is what column-reverse needs to produce natural
+    // chat order visually.
+    JSON.parse(e.data).forEach(renderEvent);
   });
   es.addEventListener('hook', (e) => {
     const event = JSON.parse(e.data);
@@ -47,9 +54,17 @@ function connect() {
 }
 
 // --- Render ---
+// Tracks "open" PreToolUse rows keyed by session_id + tool_name + input hash so
+// that a matching PostToolUse can update the same row in place instead of
+// spawning a second card. CodexMonitor-like: one row per tool call.
+const openToolRows = new Map();
+function toolRowKey(evt) {
+  return `${evt.session_id}|${evt.tool_name}|${JSON.stringify(evt.tool_input || {})}`;
+}
+
 // Top-level dispatcher: user/assistant "chat" messages get rendered as
-// CodexMonitor-style bubbles, everything else (tool calls, lifecycle events,
-// permission requests, notifications) stays as the compact event-card row.
+// CodexMonitor-style bubbles, tool-call events get merged into compact
+// "tool inline" rows, everything else stays as a minimal card row.
 function renderEvent(evt) {
   if (seenIds.has(evt.eventId)) return;
   seenIds.add(evt.eventId);
@@ -65,6 +80,19 @@ function renderEvent(evt) {
   } else if ((eventName === 'Stop' || eventName === 'StopFailure') && evt.last_assistant_message) {
     renderChatBubble(evt, 'assistant');
     maybeInsertTurnSeparator(evt);
+  } else if (eventName === 'PreToolUse' && evt.tool_name) {
+    renderToolRow(evt, 'running');
+  } else if ((eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') && evt.tool_name) {
+    // Try to find the matching open row and update it in place
+    const key = toolRowKey(evt);
+    const existing = openToolRows.get(key);
+    if (existing) {
+      updateToolRow(existing, evt, eventName === 'PostToolUseFailure' ? 'failed' : 'completed');
+      openToolRows.delete(key);
+    } else {
+      // No matching PreToolUse — render as a complete row directly
+      renderToolRow(evt, eventName === 'PostToolUseFailure' ? 'failed' : 'completed');
+    }
   } else {
     renderCompactCard(evt);
   }
@@ -72,6 +100,55 @@ function renderEvent(evt) {
   totalEvents++;
   countEl.textContent = totalEvents + ' events';
   scheduleSidebarRebuild();
+}
+
+// Minimal CodexMonitor-style tool inline row: ● tool_name · argument
+// No borders, no backgrounds. Just an icon, the tool name, and the value.
+function renderToolRow(evt, status) {
+  const card = document.createElement('div');
+  card.className = 'event-card tool-row tool-row-' + status;
+  card.id = 'evt-' + evt.eventId;
+  card.dataset.eventId = evt.eventId;
+  card.dataset.sessionId = evt.session_id || '';
+  if (currentSessionFilter && card.dataset.sessionId !== currentSessionFilter) {
+    card.style.display = 'none';
+  }
+
+  const value = toolDescription(evt) || '';
+
+  card.innerHTML = `
+    <div class="tool-row-line" onclick="toggleExpand('${evt.eventId}')">
+      <span class="tool-row-icon"></span>
+      <span class="tool-row-name">${esc(evt.tool_name)}</span>
+      <span class="tool-row-value mono">${esc(value)}</span>
+    </div>
+    <div class="card-detail" id="detail-${evt.eventId}" style="display:none">
+      ${buildDetail(evt, evt.hook_event_name)}
+    </div>
+  `;
+
+  feed.prepend(card);
+
+  if (status === 'running') {
+    openToolRows.set(toolRowKey(evt), card);
+  }
+}
+
+// Flip an open tool row from "running" to "completed" or "failed" and
+// stitch in the output (so the detail panel gets the PostToolUse data).
+function updateToolRow(card, postEvt, status) {
+  card.classList.remove('tool-row-running');
+  card.classList.add('tool-row-' + status);
+  // Rebuild the expandable detail panel using the PostToolUse payload
+  const detail = card.querySelector('.card-detail');
+  if (detail) {
+    detail.innerHTML = buildDetail(postEvt, postEvt.hook_event_name);
+  }
+  // Update dataset.eventId so detail-toggle still works via the new event
+  card.dataset.eventId = postEvt.eventId;
+  card.id = 'evt-' + postEvt.eventId;
+  const line = card.querySelector('.tool-row-line');
+  if (line) line.setAttribute('onclick', `toggleExpand('${postEvt.eventId}')`);
 }
 
 function renderCompactCard(evt) {
@@ -1085,3 +1162,13 @@ feed.innerHTML = `
 loadAgents();
 startLiveTicker();
 connect();
+
+// Auto-focus the most recently active session once the init batch has been
+// processed. Matches CodexMonitor's default behavior — landing on a page
+// where one session is active → immediately enter chat view for that session.
+setTimeout(() => {
+  if (!currentSessionFilter) {
+    const sessions = buildSessionMap();
+    if (sessions.length > 0) selectSession(sessions[0].session_id);
+  }
+}, 400);

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -37,12 +37,18 @@
 }
 
 body {
-  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
   font-size: 13px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Code / mono font used inside code blocks, inline code, Bash commands etc. */
+code, pre, kbd, samp, .mono {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
 }
 
 /* Header */
@@ -193,7 +199,7 @@ header {
   flex-direction: column;
 }
 
-/* Focused-session header bar */
+/* Focused-session header — thin, minimal, CodexMonitor-style */
 #session-header {
   position: sticky;
   top: 0;
@@ -201,25 +207,26 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  background: var(--bg-card);
-  border-bottom: 1px solid var(--border);
+  padding: 6px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px;
+  color: var(--text-dim);
 }
 .session-header-info {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 12px;
-  color: var(--text);
 }
+.session-header-agent { display: none; }  /* Hidden — no need to repeat per-bubble */
 .session-header-id {
-  font-size: 11px;
-  color: var(--text-dim);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 .session-header-cwd {
-  font-size: 11px;
   color: var(--text-dim);
-  font-family: inherit;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
 }
 
 #event-feed {
@@ -234,17 +241,24 @@ header {
 }
 
 /* When a session is focused, flip to natural chat order (newest at bottom)
-   and open up the gap between bubbles. Tool/lifecycle rows still use the
-   compact 2px gap because they're not .chat-bubble. */
+   and open up the gap between bubbles. Tool rows stay tight together like
+   a Codex/Claude tool run log. */
 #event-feed.session-focused {
   flex-direction: column-reverse;
+  padding: 16px 32px 16px 32px;
 }
-#event-feed.session-focused .chat-bubble,
-#event-feed.session-focused .turn-complete {
-  margin-top: 12px;
-}
-#event-feed.session-focused .chat-bubble + .chat-bubble {
+#event-feed.session-focused .chat-bubble {
   margin-top: 14px;
+  margin-bottom: 14px;
+}
+#event-feed.session-focused .tool-row {
+  margin: 1px 0;
+}
+#event-feed.session-focused .tool-row + .tool-row {
+  margin-top: 0;
+}
+#event-feed.session-focused .turn-complete {
+  margin: 10px 0;
 }
 /* Turn separators are only useful inside a focused session — hide in the
    firehose view to avoid confusing the global event log */
@@ -273,29 +287,31 @@ header {
 
 .bubble {
   position: relative;
-  padding: 14px 16px;
-  border-radius: 18px;
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
   word-break: break-word;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
-  transition: background-color 0.18s ease, border-color 0.18s ease;
 }
 
+/* User message — a clearly visible blue bubble, right-aligned */
 .bubble-user {
   max-width: min(72%, 560px);
-  background: rgba(87,105,247,0.10);
-  border: 1px solid rgba(87,105,247,0.25);
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: rgba(90, 120, 220, 0.22);
+  border: 1px solid rgba(90, 120, 220, 0.32);
   color: var(--text-bright);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
 }
 
+/* Assistant message — no bubble, just indented text flowing in the document */
 .bubble-assistant {
   max-width: 100%;
   width: 100%;
-  padding: 16px 18px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
 }
 
 .bubble-content {
@@ -755,21 +771,91 @@ header {
    Event Card — expandable row
    ============================================ */
 .event-card {
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: none;
   transition: background 0.15s;
 }
-.event-card:hover { background: rgba(255,255,255,0.02); }
-.event-card.expanded { background: rgba(255,255,255,0.03); }
-.event-card.highlight { background: rgba(87,105,247,0.12); transition: background 0.3s; }
+.event-card:hover { background: rgba(255,255,255,0.02); border-radius: 6px; }
+.event-card.expanded { background: rgba(255,255,255,0.03); border-radius: 6px; }
+.event-card.highlight { background: rgba(87,105,247,0.12); transition: background 0.3s; border-radius: 6px; }
 
-/* Clickable header row */
+/* ============================================
+   Tool row — minimal CodexMonitor inline
+   ● ToolName · argument
+   ============================================ */
+.tool-row {
+  padding: 0;
+}
+.tool-row-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.tool-row-line:hover {
+  color: var(--text);
+}
+.tool-row-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
+}
+.tool-row-running .tool-row-icon {
+  background: var(--warning);
+  box-shadow: 0 0 6px rgba(200,150,50,0.4);
+  animation: tool-pulse 1.1s ease-in-out infinite;
+}
+.tool-row-completed .tool-row-icon { background: var(--success); }
+.tool-row-failed .tool-row-icon { background: var(--error); }
+@keyframes tool-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+.tool-row-name {
+  color: var(--text-bright);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.tool-row-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Clickable header row (fallback for non-tool non-bubble events) */
 .card-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 6px 12px;
   cursor: pointer;
   user-select: none;
+}
+
+/* Hide noisy elements on compact cards — the per-row agent badge, the
+   event_name badge, session short id, timestamp, and expand arrow are all
+   redundant when a session is focused. Keep them only in global firehose
+   view so the event log is still inspectable. */
+#event-feed.session-focused .event-card:not(.chat-bubble) .agent-badge,
+#event-feed.session-focused .event-card:not(.chat-bubble) .event-badge,
+#event-feed.session-focused .event-card:not(.chat-bubble) .card-session,
+#event-feed.session-focused .event-card:not(.chat-bubble) .card-time,
+#event-feed.session-focused .event-card:not(.chat-bubble) .expand-arrow {
+  display: none;
+}
+/* Status indicator on non-tool non-bubble events: make it tiny and muted */
+#event-feed.session-focused .event-card:not(.chat-bubble):not(.tool-row) .status-indicator {
+  font-size: 6px;
 }
 
 .card-summary {
