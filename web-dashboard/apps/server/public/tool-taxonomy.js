@@ -340,6 +340,11 @@
   // Bash-for-everything pattern). We show the command verbatim so the
   // user still sees exactly what ran, but the row wears the upgraded
   // category's color/label.
+  //
+  // Includes `code` (Hermes execute_code runs Python) so a shell-category
+  // event for execute_code can still display meaningfully. Does NOT
+  // include `chars` because Codex write_stdin is handled by its own
+  // dedicated branch in the shell case (see normalizeToolInput).
   function isShellOrigin(input) {
     if (!input) return false;
     return (
@@ -347,11 +352,12 @@
       || typeof input.cmd === 'string'
       || Array.isArray(input.cmd)
       || typeof input.script === 'string'
+      || typeof input.code === 'string'
     );
   }
 
   function shellCommandString(input) {
-    const cmd = input.command || input.cmd || input.script;
+    const cmd = input.command || input.cmd || input.script || input.code;
     if (Array.isArray(cmd)) return cmd.join(' ');
     return typeof cmd === 'string' ? cmd : '';
   }
@@ -379,6 +385,20 @@
 
     switch (category) {
       case 'shell': {
+        // Codex write_stdin — writes bytes to a running unified-exec
+        // session, NOT a new shell command. The `chars` field can contain
+        // control characters / newlines / etc, so escape whitespace for
+        // single-line display.
+        if (toolName === 'write_stdin') {
+          const sid = input.session_id;
+          const raw = typeof input.chars === 'string' ? input.chars : '';
+          const preview = raw.length > 60 ? raw.slice(0, 60) + '…' : raw;
+          const visible = preview.replace(/\n/g, '↵ ').replace(/\t/g, '⇥ ');
+          return {
+            displayValue: sid != null ? `→ session ${sid}: ${visible}` : visible,
+            mono: true,
+          };
+        }
         const cmdRaw = input.command || input.cmd || input.script || input.code;
         const cmd = Array.isArray(cmdRaw) ? cmdRaw.join(' ') : cmdRaw;
         const desc = input.description;
@@ -402,6 +422,20 @@
       }
 
       case 'edit': {
+        // Claude NotebookEdit: notebook_path + cell_id + new_source + cell_type
+        // (NO old_string — you target a cell by id and replace/insert/delete it)
+        if (toolName === 'NotebookEdit' || input.notebook_path) {
+          const np = input.notebook_path || input.file_path;
+          const cell = input.cell_id;
+          const mode = input.edit_mode || 'replace';
+          if (cell) {
+            return {
+              displayValue: `${np || ''} [${mode} cell ${cell}]`,
+              mono: true,
+            };
+          }
+          return { displayValue: np || '', mono: true };
+        }
         // MultiEdit: edits[] array
         if (Array.isArray(input.edits) && input.edits.length) {
           const fp = input.file_path || input.filePath || input.path;
@@ -432,7 +466,9 @@
           }
         }
         // Simple Edit: file_path + old_string + new_string
-        const fp = input.file_path || input.filePath || input.path;
+        // (notebook_path is also checked as a last-ditch fallback for any
+        // edge case where NotebookEdit is dispatched through here)
+        const fp = input.file_path || input.filePath || input.path || input.notebook_path;
         return { displayValue: fp || '', mono: true };
       }
 
@@ -491,15 +527,47 @@
       }
 
       case 'subagent': {
-        const kind = input.subagent_type || input.agent_type || input.name || '';
+        // Codex wait_agent — blocking wait on one or more agent ids.
+        // targets is an array; format as "wait: a, b, c".
+        if (Array.isArray(input.targets) && input.targets.length) {
+          const joined = input.targets.join(', ');
+          return {
+            displayValue: `wait: ${truncate(joined, 70)}`,
+            mono: false,
+          };
+        }
+        // Codex spawn_agents_on_csv — batch run over a CSV file
+        if (input.csv_path) {
+          const instruction = input.instruction || '';
+          return {
+            displayValue: `csv ${input.csv_path}${instruction ? ': ' + truncate(instruction, 40) : ''}`,
+            mono: false,
+          };
+        }
+
+        const kind =
+          input.subagent_type
+          || input.agent_type
+          || input.name
+          || '';
+
+        // Description / prompt / target across all known subagent tools.
+        // Order matters: structured labels (description, goal, task_name)
+        // beat free-text (prompt, message), which beat bare identifiers
+        // (target, path_prefix, id, task_id).
         const desc =
           input.description
           || input.goal
           || input.task_name
+          || input.instruction
           || (typeof input.prompt === 'string' ? input.prompt : null)
           || (typeof input.message === 'string' ? input.message : null)
           || input.target
+          || input.path_prefix
+          || input.task_id
+          || input.id
           || '';
+
         if (kind && desc) {
           return { displayValue: `${kind}: ${truncate(desc, 60)}`, mono: false };
         }

@@ -1512,6 +1512,7 @@ header {
   font-weight: 700;
 }
 .detail-todo-item.todo-completed .detail-todo-check   { color: var(--success); }
+.detail-todo-item.todo-cancelled .detail-todo-check   { color: var(--error); }
 .detail-todo-item.todo-in_progress .detail-todo-check {
   color: var(--warning);
   animation: tool-pulse 1.2s ease-in-out infinite;
@@ -1522,6 +1523,12 @@ header {
   color: var(--text-dim);
   text-decoration: line-through;
   text-decoration-color: rgba(255,255,255,0.18);
+}
+.detail-todo-item.todo-cancelled .detail-todo-text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: rgba(171,43,63,0.35);
+  opacity: 0.65;
 }
 .detail-todo-item.todo-in_progress .detail-todo-text { color: var(--text-bright); font-weight: 500; }
 .detail-todo-item.todo-pending .detail-todo-text     { color: var(--text); }

@@ -282,13 +282,25 @@ function renderTodoDetail(evt) {
     return '<div class="lifecycle-info">(empty todo list)</div>';
   }
   const done = todos.filter((t) => t && t.status === 'completed').length;
+  const cancelled = todos.filter((t) => t && t.status === 'cancelled').length;
+  // Count completion against the "live" denominator (non-cancelled items).
+  // OpenCode and Hermes both expose `cancelled` as a fourth status; Claude
+  // does not. Display as "N/M complete" where M excludes cancelled.
+  const liveTotal = todos.length - cancelled;
+  const summary = cancelled
+    ? `${done}/${liveTotal} complete · ${cancelled} cancelled`
+    : `${done}/${liveTotal} complete`;
   let html = `<div class="detail-section">
-    <div class="detail-label">Checklist (${done}/${todos.length} complete)</div>
+    <div class="detail-label">Checklist (${summary})</div>
     <div class="detail-todo-list">`;
   for (const t of todos) {
     if (!t) continue;
     const status = t.status || 'pending';
-    const icon = status === 'completed' ? '✓' : status === 'in_progress' ? '⋯' : '○';
+    const icon =
+      status === 'completed' ? '✓'
+      : status === 'cancelled' ? '✗'
+      : status === 'in_progress' ? '⋯'
+      : '○';
     const text =
       status === 'in_progress' && t.activeForm ? t.activeForm : t.content || '';
     html += `<div class="detail-todo-item todo-${status}">
@@ -303,6 +315,30 @@ function renderTodoDetail(evt) {
 function renderEditDetail(evt) {
   const input = evt.tool_input || {};
   const tool = evt.tool_name || '';
+
+  // ── Claude NotebookEdit: targets a Jupyter cell by cell_id.
+  //    Fields: notebook_path, cell_id, new_source, cell_type, edit_mode.
+  //    No old_string — the whole cell is replaced (or inserted / deleted). ──
+  if (tool === 'NotebookEdit' || input.notebook_path) {
+    const np = input.notebook_path || input.file_path || '';
+    const cell = input.cell_id || '(first)';
+    const mode = input.edit_mode || 'replace';
+    const cellType = input.cell_type || 'code';
+    let html = `<div class="detail-section">
+      <div class="detail-label">Notebook</div>
+      <pre class="detail-shell-command">${esc(np)}</pre>
+    </div>`;
+    html += `<div class="detail-section">
+      <div class="detail-label">Target <span class="detail-label-muted">${esc(mode)} · ${esc(cellType)} cell · ${esc(cell)}</span></div>
+    </div>`;
+    if (input.new_source !== undefined) {
+      html += `<div class="detail-section">
+        <div class="detail-label">New source</div>
+        <pre class="detail-edit-added">${esc(input.new_source || '')}</pre>
+      </div>`;
+    }
+    return html;
+  }
 
   // ── Codex apply_patch: freeform lark grammar in input.input ──
   if (tool === 'apply_patch' && typeof input.input === 'string') {
