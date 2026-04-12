@@ -1,0 +1,9 @@
+{
+  "name": "@openludus/hermes-integration",
+  "version": "0.1.0",
+  "description": "Hermes-specific transparency: gateway hook (HOOK.yaml handler) + CLI plugin for capturing send_message/tool calls in gateway mode",
+  "files": [
+    "gateway-hook/handler.py",
+    "cli-plugin/__init__.py"
+  ]
+}

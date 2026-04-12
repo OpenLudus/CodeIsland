@@ -1,0 +1,16 @@
+{
+  "name": "openludus-web-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Web dashboard for transparent AI agent observation and remote approval",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "start": "npm run start -w @openludus/dashboard-server",
+    "install-hooks": "bash packages/hook-scripts/install.sh"
+  },
+  "author": "OpenLudus",
+  "license": "MIT"
+}

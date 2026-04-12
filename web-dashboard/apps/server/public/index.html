@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hook Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Claude Hook Dashboard</h1>
+      <span id="event-count">0 events</span>
+    </div>
+    <div class="header-right">
+      <span id="connection-status" class="status-dot disconnected"></span>
+      <span id="connection-label">Disconnected</span>
+    </div>
+  </header>
+  <main id="event-feed"></main>
+  <div id="overlay" style="display:none" onclick="hideOverlay()">
+    <div id="overlay-box" onclick="event.stopPropagation()">
+      <div id="overlay-header">
+        <span>Raw JSON</span>
+        <button onclick="hideOverlay()" class="overlay-close">&times;</button>
+      </div>
+      <pre id="overlay-content"></pre>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

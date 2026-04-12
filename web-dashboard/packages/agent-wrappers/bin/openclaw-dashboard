@@ -1,0 +1,91 @@
+#!/bin/bash
+# openclaw-dashboard — run openclaw CLI and stream events to the web dashboard
+# Usage: openclaw-dashboard "your prompt here"
+
+DASHBOARD_URL="${CLAUDE_DASHBOARD_URL:-http://localhost:3456}"
+SESSION_ID="openclaw-$(date +%s)-$$"
+SESSION_FILE="$HOME/.openclaw/agents/main/sessions/${SESSION_ID}.jsonl"
+
+_post() {
+  curl -s -X POST "${DASHBOARD_URL}/api/events" \
+    -H "Content-Type: application/json" \
+    -d "$1" --connect-timeout 3 --max-time 5 >/dev/null 2>&1
+}
+
+# SessionStart + UserPromptSubmit
+_post "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"${SESSION_ID}\",\"transcript_path\":\"/.openclaw/\"}"
+PROMPT_ESC=$(printf '%s' "$1" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read())[1:-1])")
+_post "{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"${SESSION_ID}\",\"transcript_path\":\"/.openclaw/\",\"prompt\":\"${PROMPT_ESC}\"}"
+
+# Run openclaw
+openclaw agent --local --session-id "${SESSION_ID}" --message "$1" 2>&1 | grep -v "^\[agent\]\|\[agents\]"
+
+# Post-process session JSONL to emit tool calls and final answer
+if [ -f "$SESSION_FILE" ]; then
+  DASHBOARD_URL="${DASHBOARD_URL}" SESSION_ID="${SESSION_ID}" SESSION_FILE="${SESSION_FILE}" \
+  python3 - << 'PYEOF'
+import json, os, urllib.request
+
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3456")
+SESSION_ID = os.environ.get("SESSION_ID", "")
+SESSION_FILE = os.environ.get("SESSION_FILE", "")
+
+def post(payload):
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{DASHBOARD_URL}/api/events",
+            data=data, headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        pass
+
+base = {"session_id": SESSION_ID, "transcript_path": "/.openclaw/"}
+pending_tools = []  # ordered list of {name, args}
+final_text = ""
+
+with open(SESSION_FILE) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") != "message":
+            continue
+        msg = d.get("message", {})
+        role = msg.get("role", "")
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            ct = item.get("type", "")
+            if ct == "toolCall" and role == "assistant":
+                args = item.get("arguments", {})
+                pending_tools.append({"name": item.get("name", ""), "args": args})
+                post({**base,
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": item.get("name", ""),
+                    "tool_input": args if isinstance(args, dict) else {"raw": str(args)},
+                })
+            elif ct == "text" and role == "toolResult":
+                result_text = item.get("text", "")[:2000]
+                tool_info = pending_tools.pop(0) if pending_tools else {}
+                post({**base,
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": tool_info.get("name", ""),
+                    "tool_input": tool_info.get("args", {}),
+                    "tool_response": result_text,
+                })
+            elif ct == "text" and role == "assistant" and item.get("text", "").strip():
+                final_text = item.get("text", "")[:500]
+
+if final_text:
+    post({**base, "hook_event_name": "Stop", "last_assistant_message": final_text})
+PYEOF
+fi
+
+_post "{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"${SESSION_ID}\",\"transcript_path\":\"/.openclaw/\"}"
