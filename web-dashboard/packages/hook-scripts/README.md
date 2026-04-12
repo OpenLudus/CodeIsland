@@ -1,4 +1,4 @@
-# @openludus/hook-scripts
+# @opencache/hook-scripts
 
 Native hook integration for agents that already support hook systems (Claude Code, Codex, Factory, Gemini, OpenCode).
 

@@ -1,5 +1,5 @@
 {
-  "name": "@openludus/dashboard-server",
+  "name": "@opencache/dashboard-server",
   "version": "0.1.0",
   "description": "Zero-dependency Node.js HTTP + SSE server that ingests hook events and serves the dashboard UI",
   "main": "src/server.js",

@@ -1,5 +1,5 @@
 {
-  "name": "@openludus/agent-wrappers",
+  "name": "@opencache/agent-wrappers",
   "version": "0.1.0",
   "description": "Wrappers for agents that have no native hook system (OpenCode, OpenClaw). They spawn the agent, parse its JSON-L output, and post events to the dashboard.",
   "files": [

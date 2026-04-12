@@ -1,5 +1,5 @@
 {
-  "name": "@openludus/hook-scripts",
+  "name": "@opencache/hook-scripts",
   "version": "0.1.0",
   "description": "Hook scripts installed into ~/.claude, ~/.codex, ~/.factory, ~/.gemini, ~/.local/share/opencode to forward events to the dashboard",
   "scripts": {

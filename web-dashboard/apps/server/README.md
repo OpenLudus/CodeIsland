@@ -1,4 +1,4 @@
-# @openludus/dashboard-server
+# @opencache/dashboard-server
 
 Zero-dependency Node.js HTTP + SSE server.
 

@@ -7,7 +7,7 @@ const os = require('os');
 
 const PORT = process.env.PORT || 3456;
 const MAX_EVENTS = 1000;
-const LOG_DIR = process.env.DASHBOARD_LOG_DIR || path.join(os.tmpdir(), 'openludus-dashboard-runs');
+const LOG_DIR = process.env.DASHBOARD_LOG_DIR || path.join(os.tmpdir(), 'opencache-dashboard-runs');
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
 
 // In-memory state

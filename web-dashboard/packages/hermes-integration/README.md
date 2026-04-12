@@ -1,4 +1,4 @@
-# @openludus/hermes-integration
+# @opencache/hermes-integration
 
 Transparency for Hermes — an AI gateway that orchestrates multiple models and protocols (Telegram, Discord, Slack, ...).
 

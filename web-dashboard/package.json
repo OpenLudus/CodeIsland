@@ -1,5 +1,5 @@
 {
-  "name": "openludus-web-dashboard",
+  "name": "opencache-web-dashboard",
   "private": true,
   "version": "0.1.0",
   "description": "Web dashboard for transparent AI agent observation and remote approval",
@@ -8,9 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "start": "npm run start -w @openludus/dashboard-server",
+    "start": "npm run start -w @opencache/dashboard-server",
     "install-hooks": "bash packages/hook-scripts/install.sh"
   },
-  "author": "OpenLudus",
+  "author": "OpenCache",
   "license": "MIT"
 }

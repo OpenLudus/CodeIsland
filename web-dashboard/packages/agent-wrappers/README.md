@@ -1,4 +1,4 @@
-# @openludus/agent-wrappers
+# @opencache/agent-wrappers
 
 CLI wrappers for agents that **don't** support native hooks. They spawn the agent as a subprocess, parse its JSON output stream, and synthesize dashboard events.
 

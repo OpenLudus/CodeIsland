@@ -1,4 +1,4 @@
-# OpenLudus Web Dashboard
+# OpenCache Web Dashboard
 
 A web-based transparency layer for local AI coding agents: observe every tool call, approve permission requests remotely, and interact with blocking decisions from any browser.
 
