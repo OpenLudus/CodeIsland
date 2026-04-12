@@ -1,4 +1,29 @@
-"""Dashboard hook — forwards Hermes events to the web dashboard via HTTP."""
+"""Dashboard hook — forwards Hermes gateway lifecycle events to the web dashboard.
+
+SCOPE (after Bug #1 fix):
+    This handler is ONLY responsible for turn boundaries:
+      - SessionStart / SessionEnd     (gateway startup, session end)
+      - UserPromptSubmit              (agent:start → the user message came in)
+      - Stop                          (agent:end → the agent produced a reply)
+      - Notification                  (slash commands)
+
+    Tool-level events (PreToolUse / PostToolUse with full arguments and
+    results) are emitted by the CLI plugin at ~/.hermes/plugins/dashboard/,
+    which fires from Hermes's plugin system on every tool call (including
+    during gateway mode, because model_tools.py calls discover_plugins()
+    at import time).
+
+WHY:
+    Previously this handler's `agent:step` branch emitted one PostToolUse
+    per tool per iteration, but the Hermes `agent:step` context only gives
+    us {name, result} per tool — NOT the actual arguments. So those events
+    had empty tool_input ({_iteration: N}) and duplicated what the plugin
+    was already reporting with full args. Net effect: every tool call
+    showed up twice on the dashboard, one row with real data and one
+    empty. Cleanest fix is to make this file handle ONLY the events that
+    the plugin cannot see (turn boundaries) and let the plugin own the
+    per-tool events exclusively.
+"""
 
 import json
 import os
@@ -24,7 +49,7 @@ def _post(payload):
 
 
 def handle(event_type, context):
-    """Send event to dashboard. Non-blocking, errors are silently ignored."""
+    """Send turn-boundary event to dashboard. Non-blocking."""
     # Base fields present on every event
     base = {
         "session_id": context.get("session_id", ""),
@@ -47,46 +72,9 @@ def handle(event_type, context):
             "prompt": context.get("message", ""),
         })
 
-    elif event_type == "agent:step":
-        # Emit one PostToolUse per tool called in this iteration so every
-        # send_message / web_search / execute_code call gets its own card.
-        tools = context.get("tools", [])
-        iteration = context.get("iteration", 0)
-
-        if tools:
-            for tool in tools:
-                if not isinstance(tool, dict):
-                    tool = {"name": str(tool), "result": None}
-                tool_name = tool.get("name", "")
-                result = tool.get("result", "")
-                # Truncate large results so the dashboard stays readable
-                if isinstance(result, str) and len(result) > 2000:
-                    result = result[:2000] + "\n…(truncated)"
-
-                # send_message → special label so the UI highlights it as
-                # "response sent to gateway user"
-                hook_name = "PostToolUse"
-                payload = {
-                    **base,
-                    "hook_event_name": hook_name,
-                    "tool_name": tool_name,
-                    "tool_input": {"_iteration": iteration},
-                    "tool_response": result,
-                    "_iteration": iteration,
-                }
-                if tool_name == "send_message":
-                    # Flag it so the frontend can highlight it distinctively
-                    payload["_gateway_response"] = True
-                _post(payload)
-        else:
-            # Fallback: no tool detail, emit bare step event
-            tool_names = context.get("tool_names", [])
-            _post({
-                **base,
-                "hook_event_name": "PostToolUse",
-                "tool_name": ", ".join(tool_names) if tool_names else "(thinking)",
-                "_iteration": iteration,
-            })
+    # NOTE: agent:step is intentionally NOT handled here. See module docstring.
+    # The CLI plugin fires PreToolUse + PostToolUse with full args for every
+    # tool call, including in gateway mode.
 
     elif event_type == "agent:end":
         _post({
@@ -103,19 +91,3 @@ def handle(event_type, context):
             "message": f"/{cmd}",
             "_command": cmd,
         })
-
-
-def _map_event(event_type):
-    """Map Hermes events to Claude-style event names for the dashboard."""
-    mapping = {
-        "gateway:startup": "SessionStart",
-        "session:start": "SessionStart",
-        "session:end": "SessionEnd",
-        "session:reset": "SessionEnd",
-        "agent:start": "UserPromptSubmit",
-        "agent:step": "PostToolUse",
-        "agent:end": "Stop",
-    }
-    if event_type.startswith("command:"):
-        return "Notification"
-    return mapping.get(event_type, event_type)
