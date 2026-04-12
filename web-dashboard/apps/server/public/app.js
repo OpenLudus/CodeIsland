@@ -102,25 +102,39 @@ function renderEvent(evt) {
   scheduleSidebarRebuild();
 }
 
-// Minimal CodexMonitor-style tool inline row: ● tool_name · argument
-// No borders, no backgrounds. Just an icon, the tool name, and the value.
+// Minimal CodexMonitor-style tool inline row, cross-agent aligned via
+// tool-taxonomy.js. All four supported agents (Claude Code / Codex / OpenCode
+// / Hermes) collapse onto a shared set of 13 semantic categories. The row
+// shows the canonical label for its category (e.g. "Shell" for every Bash
+// / exec_command / bash / terminal variant) with the raw tool_name exposed
+// only as a hover tooltip.
 function renderToolRow(evt, status) {
+  const category = window.ToolTaxonomy.classifyTool(evt.tool_name, evt._agent);
+  const normalized = window.ToolTaxonomy.normalizeToolInput(
+    category,
+    evt.tool_name,
+    evt.tool_input,
+  );
+  const canonicalLabel =
+    window.ToolTaxonomy.CATEGORY_LABELS[category] || evt.tool_name || '?';
+
   const card = document.createElement('div');
-  card.className = 'event-card tool-row tool-row-' + status;
+  card.className = `event-card tool-row tool-row-${category} tool-row-${status}`;
   card.id = 'evt-' + evt.eventId;
   card.dataset.eventId = evt.eventId;
   card.dataset.sessionId = evt.session_id || '';
+  card.dataset.category = category;
   if (currentSessionFilter && card.dataset.sessionId !== currentSessionFilter) {
     card.style.display = 'none';
   }
 
-  const value = toolDescription(evt) || '';
+  const valueClass = normalized.mono ? 'tool-row-value mono' : 'tool-row-value';
 
   card.innerHTML = `
     <div class="tool-row-line" onclick="toggleExpand('${evt.eventId}')">
       <span class="tool-row-icon"></span>
-      <span class="tool-row-name">${esc(evt.tool_name)}</span>
-      <span class="tool-row-value mono">${esc(value)}</span>
+      <span class="tool-row-name" title="${esc(evt.tool_name || '')}">${esc(canonicalLabel)}</span>
+      <span class="${valueClass}">${esc(normalized.displayValue || '')}</span>
     </div>
     <div class="card-detail" id="detail-${evt.eventId}" style="display:none">
       ${buildDetail(evt, evt.hook_event_name)}
@@ -136,15 +150,14 @@ function renderToolRow(evt, status) {
 
 // Flip an open tool row from "running" to "completed" or "failed" and
 // stitch in the output (so the detail panel gets the PostToolUse data).
+// Category class stays the same — same tool, same semantic category.
 function updateToolRow(card, postEvt, status) {
   card.classList.remove('tool-row-running');
   card.classList.add('tool-row-' + status);
-  // Rebuild the expandable detail panel using the PostToolUse payload
   const detail = card.querySelector('.card-detail');
   if (detail) {
     detail.innerHTML = buildDetail(postEvt, postEvt.hook_event_name);
   }
-  // Update dataset.eventId so detail-toggle still works via the new event
   card.dataset.eventId = postEvt.eventId;
   card.id = 'evt-' + postEvt.eventId;
   const line = card.querySelector('.tool-row-line');
@@ -343,10 +356,22 @@ function maybeInsertTurnSeparator(stopEvt) {
 // One-line summary for the collapsed row
 function buildSummary(evt, eventName) {
   if (evt.tool_name) {
-    const desc = toolDescription(evt);
+    // Use the cross-agent taxonomy for canonical label + normalized value,
+    // same path that tool-row uses in focused view. Keeps firehose and
+    // focused views visually consistent.
+    const category = window.ToolTaxonomy
+      ? window.ToolTaxonomy.classifyTool(evt.tool_name, evt._agent)
+      : 'unknown';
+    const canonicalLabel = (window.ToolTaxonomy
+      && window.ToolTaxonomy.CATEGORY_LABELS[category])
+      || evt.tool_name;
+    const normalized = window.ToolTaxonomy
+      ? window.ToolTaxonomy.normalizeToolInput(category, evt.tool_name, evt.tool_input)
+      : { displayValue: toolDescription(evt) || '' };
+    const desc = normalized.displayValue;
     const toolSpan = evt._gateway_response
-      ? `<span class="sum-tool gateway-reply">${esc(evt.tool_name)} ↩ gateway reply</span>`
-      : `<span class="sum-tool">${esc(evt.tool_name)}</span>`;
+      ? `<span class="sum-tool gateway-reply">${esc(canonicalLabel)} ↩ gateway reply</span>`
+      : `<span class="sum-tool" title="${esc(evt.tool_name)}">${esc(canonicalLabel)}</span>`;
     return toolSpan + (desc ? `<span class="sum-desc">${esc(truncate(desc, 80))}</span>` : '');
   }
   if (eventName === 'UserPromptSubmit' && evt.prompt)

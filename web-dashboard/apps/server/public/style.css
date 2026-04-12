@@ -24,6 +24,23 @@
   --border: rgb(37,43,42);
   --border-accent: rgb(47,53,52);
 
+  /* ── Tool-row category colors (13 + unknown fallback) ──
+     Referenced by .tool-row-{category} .tool-row-icon rules below.
+     Keep in sync with CATEGORY_LABELS in tool-taxonomy.js. */
+  --cat-shell:     rgb(215,140,60);   /* warm orange — terminal / running */
+  --cat-read:      rgb(80, 180, 210); /* cyan — reading docs */
+  --cat-write:     rgb(90, 190, 130); /* green — creating new */
+  --cat-edit:      rgb(220,160,80);   /* amber — modifying */
+  --cat-search:    rgb(170,120,220);  /* purple — querying */
+  --cat-fetch:     rgb(140,100,220);  /* purple-blue — external */
+  --cat-todo:      rgb(140,140,140);  /* neutral gray — checklist */
+  --cat-plan:      rgb(90,180,200);   /* teal — meta / strategy */
+  --cat-subagent:  rgb(220,100,180);  /* magenta — spawning agents */
+  --cat-question:  rgb(100,150,230);  /* blue — needs user input */
+  --cat-message:   rgb(0,180,180);    /* cyan — cross-platform comms */
+  --cat-mcp:       rgb(130,130,140);  /* cool gray — external MCP */
+  --cat-unknown:   rgb(120,120,120);  /* gray — fallback */
+
   /* Agent brand colors */
   --agent-claude: rgb(215,119,87);
   --agent-codex: rgb(16,163,127);
@@ -780,14 +797,14 @@ header {
 
 /* ============================================
    Tool row — minimal CodexMonitor inline
-   ● ToolName · argument
+   ● ToolLabel · argument
    ============================================ */
 .tool-row {
   padding: 0;
 }
 .tool-row-line {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 10px;
   padding: 6px 12px;
   font-size: 13px;
@@ -798,29 +815,61 @@ header {
 }
 .tool-row-line:hover {
   color: var(--text);
+  background: rgba(255,255,255,0.02);
+  border-radius: 4px;
 }
+
 .tool-row-icon {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--text-dim);
+  background: var(--cat-unknown);
+  align-self: center;
 }
-.tool-row-running .tool-row-icon {
+
+/* ── Category colors (base "completed" state) ──────────────── */
+.tool-row.tool-row-shell    .tool-row-icon { background: var(--cat-shell); }
+.tool-row.tool-row-read     .tool-row-icon { background: var(--cat-read); }
+.tool-row.tool-row-write    .tool-row-icon { background: var(--cat-write); }
+.tool-row.tool-row-edit     .tool-row-icon { background: var(--cat-edit); }
+.tool-row.tool-row-search   .tool-row-icon { background: var(--cat-search); }
+.tool-row.tool-row-fetch    .tool-row-icon { background: var(--cat-fetch); }
+.tool-row.tool-row-todo     .tool-row-icon { background: var(--cat-todo); }
+.tool-row.tool-row-plan     .tool-row-icon { background: var(--cat-plan); }
+.tool-row.tool-row-subagent .tool-row-icon { background: var(--cat-subagent); }
+.tool-row.tool-row-question .tool-row-icon { background: var(--cat-question); }
+.tool-row.tool-row-message  .tool-row-icon { background: var(--cat-message); }
+.tool-row.tool-row-mcp      .tool-row-icon { background: var(--cat-mcp); }
+.tool-row.tool-row-unknown  .tool-row-icon { background: var(--cat-unknown); }
+
+/* ── Status overrides (running / failed win over category color) ──
+   Written AFTER category rules so CSS cascade resolves to status at
+   equal specificity. */
+.tool-row.tool-row-running .tool-row-icon {
   background: var(--warning);
-  box-shadow: 0 0 6px rgba(200,150,50,0.4);
+  box-shadow: 0 0 6px rgba(215,140,60,0.45);
   animation: tool-pulse 1.1s ease-in-out infinite;
 }
-.tool-row-completed .tool-row-icon { background: var(--success); }
-.tool-row-failed .tool-row-icon { background: var(--error); }
-@keyframes tool-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
+.tool-row.tool-row-failed .tool-row-icon {
+  background: var(--error);
+  box-shadow: 0 0 5px rgba(171,43,63,0.4);
 }
+@keyframes tool-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+
+/* Failed rows also dim the label/value slightly */
+.tool-row.tool-row-failed .tool-row-name  { color: rgb(255,160,160); }
+.tool-row.tool-row-failed .tool-row-value { opacity: 0.7; }
+
 .tool-row-name {
   color: var(--text-bright);
   font-weight: 500;
   flex-shrink: 0;
+  font-size: 12px;
+  min-width: 44px;
 }
 .tool-row-value {
   flex: 1;
@@ -830,6 +879,11 @@ header {
   white-space: nowrap;
   font-size: 12px;
   color: var(--text-dim);
+}
+/* Monospace for paths / commands / diffs */
+.tool-row-value.mono {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+  font-size: 11px;
 }
 
 /* Clickable header row (fallback for non-tool non-bubble events) */
