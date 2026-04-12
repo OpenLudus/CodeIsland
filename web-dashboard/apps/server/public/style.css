@@ -168,6 +168,13 @@ header {
 .session-time {
   font-size: 10px;
   color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 28px;
+  text-align: right;
+}
+.session-time.live-elapsed {
+  color: var(--success);
+  font-weight: 500;
 }
 .session-preview {
   font-size: 11px;
@@ -224,6 +231,76 @@ header {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* ============================================
+   Session bottom — status bar + composer
+   ============================================ */
+#session-bottom {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  z-index: 5;
+}
+
+/* Roasting-style status bar */
+#session-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-card);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+#session-status-bar .session-status {
+  width: 7px;
+  height: 7px;
+}
+#session-status-bar .status-label {
+  color: var(--text-bright);
+  font-weight: 500;
+}
+#session-status-bar .status-elapsed {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Composer row */
+#session-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg);
+}
+.composer-input {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+.composer-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.composer-error {
+  position: absolute;
+  bottom: 60px;
+  left: 16px;
+  background: rgba(171,43,63,0.15);
+  border: 1px solid var(--error);
+  color: rgb(255,160,160);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  z-index: 100;
 }
 
 /* ============================================

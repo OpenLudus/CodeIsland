@@ -501,7 +501,10 @@ function scheduleSidebarRebuild() {
 
 function buildSessionMap() {
   const bySession = {};
-  for (const evt of allEvents) {
+  // Walk events in chronological order so the state machine flips
+  // forward (UserPromptSubmit → PreToolUse → PostToolUse → Stop) cleanly.
+  const chronological = allEvents.slice().sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt));
+  for (const evt of chronological) {
     const sid = evt.session_id;
     if (!sid) continue;
     let s = bySession[sid];
@@ -517,6 +520,11 @@ function buildSessionMap() {
         lastContent: '',
         eventCount: 0,
         hasBlocking: false,
+        // State machine fields
+        currentTool: null,
+        thinkingStartedAt: null,
+        runningToolStartedAt: null,
+        tokens: null,
       };
     }
     s.eventCount++;
@@ -531,13 +539,68 @@ function buildSessionMap() {
     if (evt.hook_event_name === 'UserPromptSubmit' && evt.prompt) s.lastContent = evt.prompt;
     if (evt.hook_event_name === 'Stop' && evt.last_assistant_message) s.lastContent = evt.last_assistant_message;
     if (evt.isBlocking && !evt.decided) s.hasBlocking = true;
+
+    // ---- Activity state machine ----
+    // Hooks can't tell us "I'm thinking, X tokens so far". But each hook
+    // event marks a transition, so we can infer the agent's current mode
+    // from event boundaries: between UserPromptSubmit and a tool call we're
+    // "thinking", between PreToolUse and PostToolUse we're "running tool",
+    // and after Stop / SessionEnd we're "idle".
+    const name = evt.hook_event_name;
+    if (name === 'UserPromptSubmit') {
+      s.thinkingStartedAt = evt.receivedAt;
+      s.currentTool = null;
+      s.runningToolStartedAt = null;
+    } else if (name === 'PreToolUse') {
+      s.currentTool = evt.tool_name || 'tool';
+      s.runningToolStartedAt = evt.receivedAt;
+      s.thinkingStartedAt = null;
+    } else if (name === 'PostToolUse' || name === 'PostToolUseFailure') {
+      s.currentTool = null;
+      s.runningToolStartedAt = null;
+      // After a tool returns we usually go back to thinking until the next event
+      s.thinkingStartedAt = evt.receivedAt;
+    } else if (name === 'Stop' || name === 'SessionEnd' || name === 'StopFailure') {
+      s.thinkingStartedAt = null;
+      s.runningToolStartedAt = null;
+      s.currentTool = null;
+    }
+
+    // Best-effort token capture — Claude Code's Stop hook sometimes ships
+    // usage stats; if we ever see them, hold onto the latest pair.
+    if (evt.usage && (evt.usage.input_tokens != null || evt.usage.output_tokens != null)) {
+      s.tokens = { input: evt.usage.input_tokens || 0, output: evt.usage.output_tokens || 0 };
+    }
   }
+
   for (const s of Object.values(bySession)) {
     if (s.hasBlocking) s.status = 'blocked';
-    else if (s.lastEventName === 'Stop' || s.lastEventName === 'SessionEnd') s.status = 'idle';
-    else s.status = 'running';
+    else if (s.currentTool) s.status = 'tool';
+    else if (s.thinkingStartedAt) s.status = 'thinking';
+    else s.status = 'idle';
   }
   return Object.values(bySession).sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+}
+
+// Format milliseconds as `42s` or `1m 14s`, matching Claude Code's UI.
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return total + 's';
+  const m = Math.floor(total / 60);
+  const r = total % 60;
+  return m + 'm ' + r + 's';
+}
+
+// 1Hz ticker that updates any element with class="live-elapsed". Each such
+// element has data-start-time set to an ISO string; we just diff against now.
+function startLiveTicker() {
+  setInterval(() => {
+    document.querySelectorAll('.live-elapsed').forEach((el) => {
+      const start = el.dataset.startTime;
+      if (!start) return;
+      el.textContent = formatElapsed(Date.now() - new Date(start).getTime());
+    });
+  }, 1000);
 }
 
 function relativeTime(iso) {
@@ -567,21 +630,118 @@ function rebuildSidebar() {
 
     const agentLabel = AGENT_NAMES[s._agent] || s._agent;
     const sid = s.session_id.substring(0, 8);
-    const time = relativeTime(s.lastSeen);
     const preview = s.lastContent || s.lastEventName || '';
+
+    // Right-side time/elapsed: while working, show live elapsed timer.
+    let rightLabel = '';
+    if (s.status === 'tool' && s.runningToolStartedAt) {
+      rightLabel = `<span class="session-time live-elapsed" data-start-time="${s.runningToolStartedAt}">0s</span>`;
+    } else if (s.status === 'thinking' && s.thinkingStartedAt) {
+      rightLabel = `<span class="session-time live-elapsed" data-start-time="${s.thinkingStartedAt}">0s</span>`;
+    } else {
+      rightLabel = `<span class="session-time">${relativeTime(s.lastSeen)}</span>`;
+    }
 
     item.innerHTML = `
       <div class="session-row1">
         <span class="session-status ${s.status}"></span>
         <span class="agent-badge agent-${s._agent}">${esc(agentLabel)}</span>
         <span class="session-id">${esc(sid)}</span>
-        <span class="session-time">${time}</span>
+        ${rightLabel}
       </div>
       <div class="session-preview">${esc(truncate(preview, 60))}</div>
     `;
     item.onclick = () => selectSession(s.session_id);
     sessionListEl.appendChild(item);
   }
+
+  // Re-render the focused session's status bar + composer so they reflect
+  // the latest state machine after each new event.
+  if (currentSessionFilter) {
+    const focused = sessions.find((s) => s.session_id === currentSessionFilter);
+    if (focused) {
+      renderSessionHeader(focused);
+      renderSessionStatusBar(focused);
+      renderSessionComposer(focused);
+    }
+  }
+}
+
+function renderSessionHeader(session) {
+  sessionHeaderEl.style.display = 'flex';
+  const agentEl = document.getElementById('session-header-agent');
+  agentEl.textContent = AGENT_NAMES[session._agent] || session._agent;
+  agentEl.className = 'session-header-agent agent-badge agent-' + session._agent;
+  document.getElementById('session-header-id').textContent = session.session_id.substring(0, 12);
+  document.getElementById('session-header-cwd').textContent = session.cwd || '';
+}
+
+// Roasting-style status bar — pulsing dot, label, live elapsed time.
+function renderSessionStatusBar(session) {
+  const bar = document.getElementById('session-status-bar');
+  let dot, label, startTime;
+  if (session.status === 'blocked') {
+    dot = 'blocked';
+    label = 'Waiting for approval';
+    startTime = null;
+  } else if (session.status === 'tool') {
+    dot = 'running';
+    label = `Running tool: ${session.currentTool}`;
+    startTime = session.runningToolStartedAt;
+  } else if (session.status === 'thinking') {
+    dot = 'running';
+    label = 'Thinking…';
+    startTime = session.thinkingStartedAt;
+  } else {
+    dot = 'idle';
+    const parts = [`${session.eventCount} events`];
+    if (session.tokens) {
+      const total = (session.tokens.input || 0) + (session.tokens.output || 0);
+      parts.push(`${total} tokens`);
+    }
+    label = `Idle · ${parts.join(' · ')}`;
+    startTime = null;
+  }
+
+  bar.innerHTML = `
+    <span class="session-status ${dot}"></span>
+    <span class="status-label">${esc(label)}</span>
+    ${startTime ? `<span class="status-elapsed live-elapsed" data-start-time="${startTime}">0s</span>` : ''}
+  `;
+}
+
+// Composer at the bottom of the main view — sends a follow-up message
+// to the currently focused session via /api/sessions/:id/message.
+function renderSessionComposer(session) {
+  const wrap = document.getElementById('session-composer');
+  // Only Claude supports resume natively today (see RESUME_SPAWNERS in server.js)
+  const supportsResume = session._agent === 'claude';
+  const isBusy = session.status !== 'idle';
+  const disabled = !supportsResume || isBusy;
+  let placeholder;
+  if (!supportsResume) {
+    placeholder = `Resume not yet supported for ${session._agent}`;
+  } else if (isBusy) {
+    placeholder = 'Wait for the agent to finish before sending…';
+  } else {
+    placeholder = 'Send a follow-up message to this session…';
+  }
+
+  wrap.innerHTML = `
+    <input type="text"
+           id="composer-input"
+           class="text-input composer-input"
+           placeholder="${esc(placeholder)}"
+           ${disabled ? 'disabled' : ''}
+           onkeydown="if(event.key==='Enter')sendToSession('${esc(session.session_id)}')">
+    <button class="btn btn-allow"
+            id="composer-send"
+            ${disabled ? 'disabled' : ''}
+            onclick="sendToSession('${esc(session.session_id)}')">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Send
+    </button>
+  `;
 }
 
 function selectSession(sessionId) {
@@ -594,11 +754,10 @@ function selectSession(sessionId) {
   });
   const session = buildSessionMap().find((s) => s.session_id === sessionId);
   if (session) {
-    sessionHeaderEl.style.display = 'flex';
-    document.getElementById('session-header-agent').textContent = AGENT_NAMES[session._agent] || session._agent;
-    document.getElementById('session-header-agent').className = 'session-header-agent agent-badge agent-' + session._agent;
-    document.getElementById('session-header-id').textContent = sessionId.substring(0, 12);
-    document.getElementById('session-header-cwd').textContent = session.cwd || '';
+    renderSessionHeader(session);
+    renderSessionStatusBar(session);
+    renderSessionComposer(session);
+    document.getElementById('session-bottom').style.display = 'flex';
   }
 }
 
@@ -607,6 +766,45 @@ function showAllSessions() {
   document.querySelectorAll('.session-item').forEach((el) => el.classList.remove('active'));
   document.querySelectorAll('.event-card').forEach((card) => { card.style.display = ''; });
   sessionHeaderEl.style.display = 'none';
+  document.getElementById('session-bottom').style.display = 'none';
+}
+
+async function sendToSession(sessionId) {
+  const input = document.getElementById('composer-input');
+  const btn = document.getElementById('composer-send');
+  if (!input || input.disabled) return;
+  const prompt = input.value.trim();
+  if (!prompt) return;
+
+  btn.disabled = true;
+  input.disabled = true;
+  btn.classList.add('btn-loading');
+
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      // Surface error inline; keep the prompt so user can retry
+      const errLabel = document.createElement('div');
+      errLabel.className = 'composer-error';
+      errLabel.textContent = data.error || 'Failed to send';
+      input.parentNode.appendChild(errLabel);
+      setTimeout(() => errLabel.remove(), 4000);
+      return;
+    }
+    input.value = '';
+    // The next inbound event for this session will trigger rebuildSidebar →
+    // renderSessionComposer, which will re-enable the input once status flips
+    // to thinking/idle. Until then, the loading state stays.
+  } catch (e) {
+    console.error('sendToSession failed', e);
+  } finally {
+    btn.classList.remove('btn-loading');
+  }
 }
 
 // =============================================================
@@ -702,4 +900,5 @@ feed.innerHTML = `
 `;
 
 loadAgents();
+startLiveTicker();
 connect();

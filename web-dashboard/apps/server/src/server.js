@@ -116,10 +116,11 @@ function getSessions() {
     if (evt.hook_event_name === 'Stop' && evt.last_assistant_message) s.lastContent = evt.last_assistant_message;
     if (evt.isBlocking && !evt.decided) s.hasBlocking = true;
   }
+  const TERMINAL_EVENTS = new Set(['Stop', 'StopFailure', 'SessionEnd']);
   const list = Object.values(bySession);
   for (const s of list) {
     if (s.hasBlocking) s.status = 'blocked';
-    else if (s.lastEventName === 'Stop' || s.lastEventName === 'SessionEnd') s.status = 'idle';
+    else if (TERMINAL_EVENTS.has(s.lastEventName)) s.status = 'idle';
     else s.status = 'running';
   }
   list.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
@@ -140,26 +141,64 @@ const AGENT_SPAWNERS = {
   openclaw: (prompt) => ({ cmd: 'openclaw-dashboard', args: [prompt] }),
 };
 
+// Resume registry — agents that can continue an existing session by id.
+// Claude Code is the only one with stable native support today: each invocation
+// of `claude -p --resume <id>` re-loads the JSONL transcript on disk and emits
+// hook events under the same session_id, so the dashboard naturally clusters
+// the new turn with the old one. OpenCode and Codex would need wrapper changes
+// to honor a passed-in session id.
+const RESUME_SPAWNERS = {
+  claude: (sessionId, prompt) => ({ cmd: 'claude', args: ['-p', '--resume', sessionId, prompt] }),
+};
+
+function spawnDetached({ cmd, args, cwd, label }) {
+  const runId = crypto.randomUUID().slice(0, 8);
+  const logPath = path.join(LOG_DIR, `${label}-${runId}.log`);
+  const out = fs.openSync(logPath, 'a');
+  const err = fs.openSync(logPath, 'a');
+  const child = spawn(cmd, args, {
+    cwd,
+    detached: true,
+    stdio: ['ignore', out, err],
+    env: { ...process.env, CLAUDE_DASHBOARD_URL: `http://localhost:${PORT}` },
+  });
+  child.unref();
+  return { pid: child.pid, logPath, runId, cmd, args, cwd };
+}
+
 function spawnAgent({ agent, prompt, cwd }) {
   const builder = AGENT_SPAWNERS[agent];
   if (!builder) throw new Error(`unknown agent: ${agent}`);
   if (!prompt || typeof prompt !== 'string') throw new Error('missing prompt');
   const workDir = (cwd && typeof cwd === 'string' && cwd.length > 0) ? cwd : (process.env.HOME || '/tmp');
   const { cmd, args } = builder(prompt);
+  return spawnDetached({ cmd, args, cwd: workDir, label: agent });
+}
 
-  const runId = crypto.randomUUID().slice(0, 8);
-  const logPath = path.join(LOG_DIR, `${agent}-${runId}.log`);
-  const out = fs.openSync(logPath, 'a');
-  const err = fs.openSync(logPath, 'a');
+// Look up the cwd + agent for a session id from the in-memory event log.
+// Used by /api/sessions/:id/message to know how to spawn the resume call.
+function findSessionMeta(sessionId) {
+  const sessionEvents = events.filter((e) => e.session_id === sessionId);
+  if (sessionEvents.length === 0) return null;
+  let cwd = null;
+  let agent = 'unknown';
+  for (const e of sessionEvents) {
+    if (e._agent && e._agent !== 'unknown') agent = e._agent;
+    if (!cwd && e.cwd) cwd = e.cwd;
+    if (!cwd && e.tool_input?.cwd) cwd = e.tool_input.cwd;
+  }
+  return { agent, cwd: cwd || process.env.HOME || '/tmp' };
+}
 
-  const child = spawn(cmd, args, {
-    cwd: workDir,
-    detached: true,
-    stdio: ['ignore', out, err],
-    env: { ...process.env, CLAUDE_DASHBOARD_URL: `http://localhost:${PORT}` },
-  });
-  child.unref();
-  return { pid: child.pid, logPath, runId, cmd, args, cwd: workDir };
+function resumeSession({ session_id, prompt }) {
+  if (!session_id) throw new Error('missing session_id');
+  if (!prompt || typeof prompt !== 'string') throw new Error('missing prompt');
+  const meta = findSessionMeta(session_id);
+  if (!meta) throw new Error(`unknown session: ${session_id}`);
+  const builder = RESUME_SPAWNERS[meta.agent];
+  if (!builder) throw new Error(`resume not supported for agent: ${meta.agent}`);
+  const { cmd, args } = builder(session_id, prompt);
+  return spawnDetached({ cmd, args, cwd: meta.cwd, label: `${meta.agent}-resume` });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -230,6 +269,21 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const { agent, prompt, cwd } = JSON.parse(body);
       const info = spawnAgent({ agent, prompt, cwd });
+      json(res, 200, { ok: true, ...info });
+    } catch (e) {
+      json(res, 400, { error: String(e.message || e) });
+    }
+    return;
+  }
+
+  // POST /api/sessions/:id/message — continue an existing session via --resume
+  const resumeMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/message$/);
+  if (req.method === 'POST' && resumeMatch) {
+    const sessionId = decodeURIComponent(resumeMatch[1]);
+    try {
+      const body = await readBody(req);
+      const { prompt } = JSON.parse(body);
+      const info = resumeSession({ session_id: sessionId, prompt });
       json(res, 200, { ok: true, ...info });
     } catch (e) {
       json(res, 400, { error: String(e.message || e) });
