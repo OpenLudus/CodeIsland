@@ -152,8 +152,9 @@ function updateToolRow(card, postEvt, status) {
 }
 
 function renderCompactCard(evt) {
+  const isBlockingUndecided = evt.isBlocking && !evt.decided;
   const card = document.createElement('div');
-  card.className = 'event-card' + (evt.isBlocking && !evt.decided ? ' blocking' : '') + (evt.decided ? ' decided' : '');
+  card.className = 'event-card' + (isBlockingUndecided ? ' blocking expanded' : '') + (evt.decided ? ' decided' : '');
   card.id = 'evt-' + evt.eventId;
   card.dataset.eventId = evt.eventId;
   card.dataset.sessionId = evt.session_id || '';
@@ -170,6 +171,12 @@ function renderCompactCard(evt) {
 
   const summary = buildSummary(evt, eventName);
 
+  // Blocking events (PermissionRequest, Notification+question, Elicitation)
+  // auto-expand so the decision buttons show without a click. Non-blocking
+  // events render collapsed.
+  const arrowChar = isBlockingUndecided ? '&#x25BC;' : '&#x25B6;';
+  const detailStyle = isBlockingUndecided ? '' : ' style="display:none"';
+
   card.innerHTML = `
     <div class="card-row" onclick="toggleExpand('${evt.eventId}')">
       <span class="status-indicator ${sc}">${CIRCLE}</span>
@@ -178,9 +185,9 @@ function renderCompactCard(evt) {
       <span class="card-summary">${summary}</span>
       <span class="card-session">${esc(sessionShort)}</span>
       <span class="card-time">${time}</span>
-      <span class="expand-arrow">&#x25B6;</span>
+      <span class="expand-arrow">${arrowChar}</span>
     </div>
-    <div class="card-detail" id="detail-${evt.eventId}" style="display:none">
+    <div class="card-detail" id="detail-${evt.eventId}"${detailStyle}>
       ${buildDetail(evt, eventName)}
     </div>
   `;
@@ -694,20 +701,71 @@ async function elicitReject(eventId, btn) {
 }
 
 // --- Helpers ---
+// Build a human-readable one-liner for a tool call row. Has to handle:
+//  - External tools (Bash, Read, Write, Edit, Grep, Glob, WebFetch, WebSearch)
+//  - Claude-specific internal tools (TodoWrite, ToolSearch, Task, Skill,
+//    SlashCommand, AskUserQuestion, ExitPlanMode, NotebookEdit, MultiEdit)
+//  - MCP tools (various shapes) and any unknown tool — fall back to whatever
+//    "looks like" a label in its tool_input.
 function toolDescription(evt) {
   const input = evt.tool_input;
   if (!input) return null;
-  switch (evt.tool_name) {
-    case 'Bash': return input.description || input.command;
-    case 'Read': return input.file_path;
-    case 'Edit': case 'Write': return input.file_path;
-    case 'Grep': return input.pattern + (input.path ? ' in ' + input.path : '');
-    case 'Glob': return input.pattern;
-    case 'WebSearch': return input.query;
-    case 'WebFetch': return input.url;
-    case 'Agent': return input.description || (input.prompt ? input.prompt.substring(0, 60) : null);
-    case 'Execute': return input.command || input.file_path;
-    default: return input.file_path || input.command || input.pattern || input.result || null;
+  const name = evt.tool_name || '';
+  switch (name) {
+    case 'Bash':
+      return input.description || input.command;
+    case 'Read':
+      return input.file_path + (input.offset ? ` @${input.offset}` : '');
+    case 'Edit':
+    case 'MultiEdit':
+    case 'Write':
+    case 'NotebookEdit':
+      return input.file_path || input.notebook_path;
+    case 'Grep':
+      return (input.pattern || '') + (input.path ? ' in ' + input.path : '') + (input.glob ? ' (' + input.glob + ')' : '');
+    case 'Glob':
+      return input.pattern + (input.path ? ' in ' + input.path : '');
+    case 'WebSearch':
+      return input.query;
+    case 'WebFetch':
+      return input.url;
+    case 'Task':
+    case 'Agent':
+      return input.description || (input.prompt ? input.prompt.substring(0, 60) : input.subagent_type);
+    case 'Execute':
+      return input.command || input.file_path;
+    case 'TodoWrite': {
+      const todos = input.todos || [];
+      if (!todos.length) return '(empty list)';
+      const active = todos.find((t) => t.status === 'in_progress');
+      const done = todos.filter((t) => t.status === 'completed').length;
+      const label = active ? active.activeForm || active.content : todos[0].content;
+      return `${done}/${todos.length} · ${label || ''}`;
+    }
+    case 'ToolSearch':
+      return input.query;
+    case 'AskUserQuestion':
+      return input.question;
+    case 'SlashCommand':
+      return input.command;
+    case 'ExitPlanMode':
+    case 'EnterPlanMode':
+      return input.plan ? input.plan.substring(0, 80) : '(plan mode)';
+    case 'Skill':
+      return input.skill_name || input.name;
+    default:
+      return (
+        input.file_path
+        || input.path
+        || input.command
+        || input.pattern
+        || input.query
+        || input.url
+        || input.description
+        || input.name
+        || input.result
+        || null
+      );
   }
 }
 

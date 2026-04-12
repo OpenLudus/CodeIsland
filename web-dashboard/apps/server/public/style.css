@@ -842,20 +842,27 @@ header {
   user-select: none;
 }
 
-/* Hide noisy elements on compact cards — the per-row agent badge, the
-   event_name badge, session short id, timestamp, and expand arrow are all
-   redundant when a session is focused. Keep them only in global firehose
-   view so the event log is still inspectable. */
-#event-feed.session-focused .event-card:not(.chat-bubble) .agent-badge,
-#event-feed.session-focused .event-card:not(.chat-bubble) .event-badge,
-#event-feed.session-focused .event-card:not(.chat-bubble) .card-session,
-#event-feed.session-focused .event-card:not(.chat-bubble) .card-time,
-#event-feed.session-focused .event-card:not(.chat-bubble) .expand-arrow {
+/* In focused view:
+   - Tool-call rows have their own compact .tool-row-line layout
+   - Chat bubbles have their own layout
+   - LIFECYCLE events (SessionStart, SessionEnd, SubagentStart/Stop,
+     Notification, PermissionRequest, Elicitation, PreCompact, etc.) still
+     use the old .card-row format. We hide the per-row agent badge +
+     session short id + timestamp (those are redundant when the session is
+     already focused) but KEEP the event-name badge and expand-arrow so
+     users can actually tell what type of event each row is. */
+#event-feed.session-focused .event-card:not(.chat-bubble):not(.tool-row) .agent-badge,
+#event-feed.session-focused .event-card:not(.chat-bubble):not(.tool-row) .card-session,
+#event-feed.session-focused .event-card:not(.chat-bubble):not(.tool-row) .card-time {
   display: none;
 }
-/* Status indicator on non-tool non-bubble events: make it tiny and muted */
-#event-feed.session-focused .event-card:not(.chat-bubble):not(.tool-row) .status-indicator {
-  font-size: 6px;
+/* Make the event-name badge more readable in focused view */
+#event-feed.session-focused .event-card:not(.chat-bubble):not(.tool-row) .event-badge {
+  background: transparent;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .card-summary {
