@@ -502,13 +502,29 @@
       case 'todo': {
         const todos = Array.isArray(input.todos) ? input.todos : [];
         if (todos.length === 0) return { displayValue: '(empty)', mono: false };
+        // Cancelled counts separately — same math as renderTodoDetail so
+        // the compact row and the expanded checklist agree on the
+        // completion ratio. OpenCode and Hermes both have a `cancelled`
+        // status; Claude doesn't, so for Claude sessions cancelled is 0
+        // and this behaves identically to the old single-denominator form.
         const completed = todos.filter((t) => t && t.status === 'completed').length;
+        const cancelled = todos.filter((t) => t && t.status === 'cancelled').length;
+        const liveTotal = todos.length - cancelled;
+        // All items cancelled — no meaningful progress ratio.
+        if (liveTotal === 0) {
+          return { displayValue: `(${cancelled} cancelled)`, mono: false };
+        }
+        // Pick an active or first non-cancelled todo for the label so we
+        // don't headline a crossed-out task.
         const active = todos.find((t) => t && t.status === 'in_progress');
-        const label = (active && (active.activeForm || active.content))
-          || (todos[0] && todos[0].content)
+        const firstLive = todos.find((t) => t && t.status !== 'cancelled');
+        const label =
+          (active && (active.activeForm || active.content))
+          || (firstLive && firstLive.content)
           || '';
+        const suffix = cancelled ? ` ✗${cancelled}` : '';
         return {
-          displayValue: `${completed}/${todos.length} · ${truncate(label, 50)}`,
+          displayValue: `${completed}/${liveTotal}${suffix} · ${truncate(label, 50)}`,
           mono: false,
         };
       }

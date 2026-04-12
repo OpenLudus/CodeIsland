@@ -76,15 +76,34 @@ def _on_session_end(**kwargs):
     _send("SessionEnd", _sid=sid)
 
 
-def _on_session_finalize(**kwargs):
+def _post_llm_call(**kwargs):
+    """Fires once per turn AFTER the tool-calling loop completes.
+
+    This is where the real assistant content lives (`assistant_response`),
+    so we emit a proper Stop event here instead of from `on_session_finalize`.
+    In gateway mode, the gateway-hook/handler.py's `agent:end` is
+    authoritative and carries the same content — skip to avoid duplicates.
+    """
     sid = kwargs.get("session_id", _session_id)
     platform = _session_platforms.get(sid, "cli")
-    # In gateway mode, the gateway-hook/handler.py's `agent:end` → Stop is
-    # authoritative and carries the actual response text. Skipping here
-    # prevents a duplicate empty Stop row next to the real assistant bubble.
     if _is_gateway_platform(platform):
         return
-    _send("Stop", _sid=sid)
+    response = kwargs.get("assistant_response", "")
+    if not isinstance(response, str):
+        response = str(response) if response is not None else ""
+    response = response.strip()
+    _send("Stop", _sid=sid, last_assistant_message=response)
+
+
+def _on_session_finalize(**kwargs):
+    """Session is being finalized (CLI exit). Nothing to emit here.
+
+    Turn-end Stop events fire from _post_llm_call above. The SessionEnd
+    event fires from _on_session_end. There's nothing additional to
+    send at finalize time — emitting an empty Stop here would just leave
+    a stray compact "STOP" row at the bottom of every CLI session.
+    """
+    return
 
 
 def _pre_tool_call(**kwargs):
@@ -148,5 +167,6 @@ def register(ctx):
     ctx.register_hook("on_session_start", _on_session_start)
     ctx.register_hook("on_session_end", _on_session_end)
     ctx.register_hook("on_session_finalize", _on_session_finalize)
+    ctx.register_hook("post_llm_call", _post_llm_call)
     ctx.register_hook("pre_tool_call", _pre_tool_call)
     ctx.register_hook("post_tool_call", _post_tool_call)

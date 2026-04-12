@@ -187,6 +187,17 @@ function updateToolRow(card, postEvt, status) {
 // / error / raw JSON.
 function buildToolRowDetail(evt, category) {
   const input = evt.tool_input || {};
+
+  // write_stdin owns its own renderer — it's not a "new shell command"
+  // but a write into an existing unified-exec session's stdin. Routing
+  // it through renderShellDetail would show "Command: (empty)" because
+  // there's no command field; the actual payload lives in `chars`.
+  if (evt.tool_name === 'write_stdin') {
+    let html = renderWriteStdinDetail(evt);
+    html += `<button class="toggle-btn" onclick="event.stopPropagation();showRaw('${evt.eventId}')" style="margin-top:8px">View raw JSON</button>`;
+    return html;
+  }
+
   // Shell-origin detection: the category may have been upgraded from
   // shell → read/search/write/edit by the taxonomy heuristic, but the
   // underlying payload is still a shell command + its captured output.
@@ -220,6 +231,45 @@ function buildToolRowDetail(evt, category) {
   // so power users can inspect the full event when the curated view is
   // insufficient.
   html += `<button class="toggle-btn" onclick="event.stopPropagation();showRaw('${evt.eventId}')" style="margin-top:8px">View raw JSON</button>`;
+  return html;
+}
+
+// Codex write_stdin: writing bytes to an existing unified-exec session's
+// stdin. Show the session id, the raw chars being written (preserving
+// newlines / tabs / control bytes as literal characters in a pre block
+// so the user can see exactly what's happening), and any output that
+// came back from the session post-write.
+function renderWriteStdinDetail(evt) {
+  const input = evt.tool_input || {};
+  const sid = input.session_id;
+  const chars = typeof input.chars === 'string' ? input.chars : '';
+  const yieldMs = input.yield_time_ms;
+
+  let html = `<div class="detail-section">
+    <div class="detail-label">Session${yieldMs != null ? ' <span class="detail-label-muted">yield ' + yieldMs + 'ms</span>' : ''}</div>
+    <pre class="detail-shell-command">${esc(sid != null ? String(sid) : '(unknown)')}</pre>
+  </div>`;
+
+  html += `<div class="detail-section">
+    <div class="detail-label">Writing to stdin <span class="detail-label-muted">${chars.length} bytes</span></div>
+    <pre class="detail-shell-output">${esc(chars || '(empty — polling for output)')}</pre>
+  </div>`;
+
+  if (evt.tool_response !== undefined && evt.tool_response !== null) {
+    const out = extractShellOutput(evt.tool_response);
+    if (out) {
+      html += `<div class="detail-section">
+        <div class="detail-label">Session output</div>
+        <pre class="detail-shell-output">${esc(out)}</pre>
+      </div>`;
+    }
+  }
+  if (evt.error) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Error</div>
+      <pre class="detail-edit-removed">${esc(String(evt.error))}</pre>
+    </div>`;
+  }
   return html;
 }
 
