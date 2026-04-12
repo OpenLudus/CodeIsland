@@ -363,9 +363,16 @@
   }
 
   // ─── Normalization per category ────────────────────────────────────────
-  // Returns { displayValue: string, mono: boolean, extras?: any }
+  // Returns { displayValue, mono, pill? }
   //   displayValue  — the text shown in the tool row's right column
   //   mono          — true means render in monospace (for paths, commands, diffs)
+  //   pill          — true means wrap the value in a dark terminal-pill
+  //                    with a green `>_` prefix. Applied to shell commands
+  //                    (native `Bash` / `exec_command` etc. OR shell-origin
+  //                    refined categories like Codex `cat` upgraded to read)
+  //                    but NOT to `write_stdin` (semantically different) or
+  //                    to events that have a description field (we prefer
+  //                    the human-readable description over the raw command).
   function normalizeToolInput(category, toolName, input) {
     input = input || {};
 
@@ -380,7 +387,13 @@
     ) {
       const cmd = shellCommandString(input);
       const desc = input.description;
-      return { displayValue: desc || cmd, mono: !desc };
+      return {
+        displayValue: desc || cmd,
+        mono: !desc,
+        // Pill only when we're showing the raw command (no description).
+        // If we show a friendly description, keep it as plain text.
+        pill: !desc && !!cmd,
+      };
     }
 
     switch (category) {
@@ -388,7 +401,8 @@
         // Codex write_stdin — writes bytes to a running unified-exec
         // session, NOT a new shell command. The `chars` field can contain
         // control characters / newlines / etc, so escape whitespace for
-        // single-line display.
+        // single-line display. Never gets a terminal pill because
+        // semantically it's not "execute this command".
         if (toolName === 'write_stdin') {
           const sid = input.session_id;
           const raw = typeof input.chars === 'string' ? input.chars : '';
@@ -402,7 +416,11 @@
         const cmdRaw = input.command || input.cmd || input.script || input.code;
         const cmd = Array.isArray(cmdRaw) ? cmdRaw.join(' ') : cmdRaw;
         const desc = input.description;
-        return { displayValue: desc || cmd || '', mono: !desc && !!cmd };
+        return {
+          displayValue: desc || cmd || '',
+          mono: !desc && !!cmd,
+          pill: !desc && !!cmd,
+        };
       }
 
       case 'read': {

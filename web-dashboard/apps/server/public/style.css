@@ -248,7 +248,9 @@ header {
 
 #event-feed {
   flex: 1;
-  max-width: 900px;
+  max-width: 768px;            /* was 900px — 768 matches the React ref's
+                                  max-w-3xl and is the sweet spot for
+                                  conversational text readability */
   width: 100%;
   margin: 0 auto;
   padding: 14px 24px 24px;
@@ -310,25 +312,44 @@ header {
   word-break: break-word;
 }
 
-/* User message — a clearly visible blue bubble, right-aligned */
+/* User message — solid dark-blue bubble, right-aligned, with a subtle
+   "tail" corner at the top-right (where the message "points back" to
+   the user's side of the chat). Matches the CodexMonitor React ref:
+   rounded-2xl rounded-tr-sm bg-[#3b5b8c]. */
 .bubble-user {
-  max-width: min(72%, 560px);
+  max-width: min(85%, 560px);
   padding: 12px 16px;
-  border-radius: 18px;
-  background: rgba(90, 120, 220, 0.22);
-  border: 1px solid rgba(90, 120, 220, 0.32);
-  color: var(--text-bright);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+  border-radius: 16px 3px 16px 16px; /* TL TR BR BL — TR is the tail */
+  background: #3b5b8c;
+  border: none;
+  color: #f4f4f5;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
 }
 
-/* Assistant message — no bubble, just indented text flowing in the document */
+/* Assistant message — solid dark-gray bubble, left-aligned, with a
+   subtle "tail" corner at the top-left. Matches rounded-2xl rounded-tl-sm
+   bg-[#2b2d31] border-zinc-800/50 from the React ref. Max-width 85%
+   so long responses don't span the whole column and keep a ~15%
+   indent signal on the right. */
 .bubble-assistant {
-  max-width: 100%;
-  width: 100%;
-  padding: 0;
-  background: transparent;
-  border: none;
+  max-width: 85%;
+  width: auto;
+  padding: 14px 16px;
+  border-radius: 3px 16px 16px 16px; /* TL is the tail */
+  background: #2b2d31;
+  border: 1px solid rgba(60, 60, 70, 0.4);
   color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+}
+
+/* First paragraph of an assistant message is rendered with slightly
+   heavier weight to give the "summary line" feel from the React ref
+   (where the dev manually wrote `mb-3 font-medium` on the first <p>).
+   Uses marked's output structure — `<p>` is the first block-level
+   child of .markdown after marked.parse() runs. */
+.bubble-assistant .markdown > p:first-child {
+  font-weight: 500;
+  color: var(--text-bright);
 }
 
 .bubble-content {
@@ -547,17 +568,20 @@ header {
   background: var(--bg);
 }
 
-/* Working pill — capsule with spinner + timer + shimmer label */
+/* Working indicator — flat row, no pill background, matching the
+   React ref's `[spinner] 1:03 Working...` one-liner. The older v0.5
+   hypothetical was a capsule pill; that visually out-weighted the
+   surrounding chat flow and we've since agreed the minimal flat
+   variant reads better. */
 .working {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-card);
+  gap: 8px;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .working-spinner {
@@ -602,11 +626,7 @@ header {
   color: var(--text-dim);
 }
 
-/* Blocked pill — static amber dot instead of spinner */
-.working-blocked {
-  border-color: rgba(200,150,50,0.35);
-  background: rgba(200,150,50,0.06);
-}
+/* Blocked state — static amber dot instead of spinner */
 .working-blocked .working-text-static {
   color: var(--warning);
 }
@@ -897,6 +917,39 @@ header {
 .tool-row-value.mono {
   font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
   font-size: 11px;
+}
+
+/* Terminal pill — wraps a raw shell command in a dark code-block
+   style chip with a green `>_` prompt prefix. Applied to:
+     • native shell events (Bash, exec_command, terminal, …) with no
+       `description` field
+     • shell-origin refined events (Codex `cat /file` upgraded to Read)
+       with no description
+   NOT applied to `write_stdin` (semantically different), nor to events
+   whose display value is a description, nor to plain file paths. */
+.tool-row-value.tool-row-pill {
+  flex: 0 1 auto;       /* shrink-to-fit, not grow-to-fill */
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  background: #1e1e24;
+  border: 1px solid rgba(60, 60, 70, 0.45);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-row-value.tool-row-pill::before {
+  content: '>_';
+  color: #4ade80;        /* emerald-400 — matches the React reference */
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 /* Clickable header row (fallback for non-tool non-bubble events) */

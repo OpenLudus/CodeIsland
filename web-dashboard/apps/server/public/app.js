@@ -132,7 +132,10 @@ function renderToolRow(evt, status) {
     card.style.display = 'none';
   }
 
-  const valueClass = normalized.mono ? 'tool-row-value mono' : 'tool-row-value';
+  const valueClasses = ['tool-row-value'];
+  if (normalized.mono) valueClasses.push('mono');
+  if (normalized.pill) valueClasses.push('tool-row-pill');
+  const valueClass = valueClasses.join(' ');
 
   card.innerHTML = `
     <div class="tool-row-line" onclick="toggleExpand('${evt.eventId}')">
