@@ -109,7 +109,11 @@ function renderEvent(evt) {
 // Bash / exec_command / bash / terminal variant) with the raw tool_name
 // exposed only as a hover tooltip and inside the expanded detail panel.
 function renderToolRow(evt, status) {
-  const category = window.ToolTaxonomy.classifyTool(evt.tool_name, evt._agent);
+  const category = window.ToolTaxonomy.classifyTool(
+    evt.tool_name,
+    evt.tool_input,
+    evt._agent,
+  );
   const normalized = window.ToolTaxonomy.normalizeToolInput(
     category,
     evt.tool_name,
@@ -159,7 +163,11 @@ function updateToolRow(card, postEvt, status) {
   card.classList.remove('tool-row-running');
   card.classList.add('tool-row-' + status);
 
-  const category = window.ToolTaxonomy.classifyTool(postEvt.tool_name, postEvt._agent);
+  const category = window.ToolTaxonomy.classifyTool(
+    postEvt.tool_name,
+    postEvt.tool_input,
+    postEvt._agent,
+  );
 
   const detail = card.querySelector('.card-detail');
   if (detail) {
@@ -178,19 +186,35 @@ function updateToolRow(card, postEvt, status) {
 // compact lifecycle cards, which already handles tool_input / tool_response
 // / error / raw JSON.
 function buildToolRowDetail(evt, category) {
+  const input = evt.tool_input || {};
+  // Shell-origin detection: the category may have been upgraded from
+  // shell → read/search/write/edit by the taxonomy heuristic, but the
+  // underlying payload is still a shell command + its captured output.
+  // Use the shell detail renderer in that case — it's the only one
+  // that knows how to show `command + cwd + stdout + exit code`.
+  const isShellOrigin =
+    typeof input.command === 'string'
+    || typeof input.cmd === 'string'
+    || Array.isArray(input.cmd)
+    || typeof input.script === 'string';
+
   let html = '';
-  switch (category) {
-    case 'shell':
-      html = renderShellDetail(evt);
-      break;
-    case 'todo':
-      html = renderTodoDetail(evt);
-      break;
-    case 'edit':
-      html = renderEditDetail(evt);
-      break;
-    default:
-      return buildDetail(evt, evt.hook_event_name);
+  if (isShellOrigin) {
+    html = renderShellDetail(evt);
+  } else {
+    switch (category) {
+      case 'shell':
+        html = renderShellDetail(evt);
+        break;
+      case 'todo':
+        html = renderTodoDetail(evt);
+        break;
+      case 'edit':
+        html = renderEditDetail(evt);
+        break;
+      default:
+        return buildDetail(evt, evt.hook_event_name);
+    }
   }
   // All specialized renderers still expose a "view raw JSON" fallback
   // so power users can inspect the full event when the curated view is
@@ -564,7 +588,7 @@ function buildSummary(evt, eventName) {
     // same path that tool-row uses in focused view. Keeps firehose and
     // focused views visually consistent.
     const category = window.ToolTaxonomy
-      ? window.ToolTaxonomy.classifyTool(evt.tool_name, evt._agent)
+      ? window.ToolTaxonomy.classifyTool(evt.tool_name, evt.tool_input, evt._agent)
       : 'unknown';
     const canonicalLabel = (window.ToolTaxonomy
       && window.ToolTaxonomy.CATEGORY_LABELS[category])

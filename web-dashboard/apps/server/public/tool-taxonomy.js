@@ -173,8 +173,14 @@
   };
 
   // ─── Classification function ───────────────────────────────────────────
-  // Ambiguous-name handling lives here so the static map can stay flat.
-  function classifyTool(toolName, agent) {
+  // Signature: (toolName, input?, agent?)
+  // `input` is the raw tool_input — used only by the shell-command
+  // refinement step (see refineShellCommand below). Kept optional so
+  // callers that only have the name can still get a base category.
+  //
+  // Ambiguous-name handling and shell-command heuristic refinement both
+  // live here so the static TOOL_CATEGORY map can stay flat.
+  function classifyTool(toolName, input, agent) {
     if (!toolName) return 'unknown';
 
     // send_message is overloaded:
@@ -188,7 +194,104 @@
     // Dynamic MCP tools may come in as "mcp__something__tool_name".
     if (toolName.startsWith('mcp__')) return 'mcp';
 
-    return TOOL_CATEGORY[toolName] || 'unknown';
+    const base = TOOL_CATEGORY[toolName] || 'unknown';
+
+    // Codex (and sometimes Claude / OpenCode) route file-reads,
+    // content-searches, and even file-edits through shell commands.
+    // Peek at the command string and re-classify so the user sees
+    // "Read cat file.txt" (cyan) instead of a wall of "Shell" (orange).
+    if (base === 'shell' && input) {
+      const refined = refineShellCommand(input);
+      if (refined) return refined;
+    }
+
+    return base;
+  }
+
+  // Inspect a shell command and bucket it into read / search / write /
+  // edit. Returns null if the command doesn't match any specialized
+  // pattern and should stay classified as plain 'shell'.
+  //
+  // Strategy:
+  //   1. Strip a `bash -lc '…'` wrapper so we see the real payload.
+  //   2. Redirection wins first — `foo > file` is always a write.
+  //   3. Split the body on compound operators (|, ||, &&, ;) and scan
+  //      each segment in order. The first segment that maps to a
+  //      non-null sub-category wins. This lets `pwd && ls -la /root`
+  //      classify as read (ls) even though pwd alone is plain shell.
+  function refineShellCommand(input) {
+    let cmd = input.command || input.cmd || input.script;
+    if (Array.isArray(cmd)) cmd = cmd.join(' ');
+    if (typeof cmd !== 'string' || !cmd.trim()) return null;
+
+    const wrapMatch = cmd.match(/^(?:bash|sh|zsh)\s+(?:-l)?c\s+['"]?(.+?)['"]?\s*$/);
+    const body = wrapMatch ? wrapMatch[1] : cmd;
+
+    // Redirection across the whole body always wins.
+    if (/(?:^|\s)>\s*[^\s|&>]/.test(body) || /(?:^|\s)>>\s*[^\s|&>]/.test(body)) {
+      return 'write';
+    }
+
+    const segments = body
+      .split(/\s*(?:\|\|?|&&|[;|])\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    for (const seg of segments) {
+      const refined = refineSegmentBin(seg);
+      if (refined) return refined;
+    }
+    return null;
+  }
+
+  function refineSegmentBin(seg) {
+    if (!seg) return null;
+    const bin = seg.split(/\s+/)[0].replace(/^['"]|['"]$/g, '');
+    if (!bin) return null;
+
+    // In-place edits via sed -i / awk -i inplace / apply_patch / patch
+    if (bin === 'sed' && /(?:^|\s)-i(?:\s|$|\b)/.test(seg)) return 'edit';
+    if (bin === 'awk' && /-i\s+inplace/.test(seg)) return 'edit';
+    if (bin === 'apply_patch') return 'edit';
+    if (bin === 'patch') return 'edit';
+
+    // Read-like: content / line-range / preview
+    if (/^(cat|head|tail|nl|less|more|bat|sed|awk|strings|od|xxd|hexdump)$/.test(bin)) {
+      return 'read';
+    }
+
+    // Directory / file listing — semantic subset of "read".
+    // `pwd` is intentionally excluded — it's a meta "where am I" query.
+    if (/^(ls|dir|tree|find|stat|file|wc|realpath|readlink|basename|dirname)$/.test(bin)) {
+      return 'read';
+    }
+
+    // Search
+    if (/^(grep|egrep|fgrep|rg|ack|ag|ripgrep)$/.test(bin)) return 'search';
+
+    // git sub-commands that are read/search ops. We have to walk past
+    // any global flags — particularly `-C <path>` and `-c key=val` which
+    // take an argument — to find the actual sub-command token.
+    if (bin === 'git') {
+      const tokens = seg.split(/\s+/);
+      let idx = 1;
+      while (idx < tokens.length) {
+        const t = tokens[idx];
+        if (t === '-C' || t === '-c') { idx += 2; continue; }
+        if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) { idx += 1; continue; }
+        if (t === '--git-dir' || t === '--work-tree') { idx += 2; continue; }
+        if (t.startsWith('-')) { idx += 1; continue; }
+        break;
+      }
+      const sub = tokens[idx];
+      if (sub && /^(diff|log|show|status|blame|ls-files|grep|rev-parse|describe|branch|remote)$/.test(sub)) {
+        return 'search';
+      }
+    }
+
+    if (/^tee$/.test(bin)) return 'write';
+
+    return null;
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────
@@ -232,12 +335,47 @@
     return out;
   }
 
+  // Shell-origin detection: this tool_input carries a command field,
+  // meaning the event was upgraded from shell category (e.g. Codex's
+  // Bash-for-everything pattern). We show the command verbatim so the
+  // user still sees exactly what ran, but the row wears the upgraded
+  // category's color/label.
+  function isShellOrigin(input) {
+    if (!input) return false;
+    return (
+      typeof input.command === 'string'
+      || typeof input.cmd === 'string'
+      || Array.isArray(input.cmd)
+      || typeof input.script === 'string'
+    );
+  }
+
+  function shellCommandString(input) {
+    const cmd = input.command || input.cmd || input.script;
+    if (Array.isArray(cmd)) return cmd.join(' ');
+    return typeof cmd === 'string' ? cmd : '';
+  }
+
   // ─── Normalization per category ────────────────────────────────────────
   // Returns { displayValue: string, mono: boolean, extras?: any }
   //   displayValue  — the text shown in the tool row's right column
   //   mono          — true means render in monospace (for paths, commands, diffs)
   function normalizeToolInput(category, toolName, input) {
     input = input || {};
+
+    // For categories that can be reached BOTH natively (Claude Read, OC
+    // grep, etc.) AND via shell-refinement (Codex `cat file`, `rg query`),
+    // show the command verbatim when it's a shell-origin input. Raw
+    // command beats any heuristic path extraction — the user always
+    // wants to see exactly what Codex asked the shell to do.
+    if (
+      (category === 'read' || category === 'search' || category === 'write' || category === 'edit')
+      && isShellOrigin(input)
+    ) {
+      const cmd = shellCommandString(input);
+      const desc = input.description;
+      return { displayValue: desc || cmd, mono: !desc };
+    }
 
     switch (category) {
       case 'shell': {
