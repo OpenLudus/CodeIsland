@@ -47,6 +47,9 @@ function connect() {
 }
 
 // --- Render ---
+// Top-level dispatcher: user/assistant "chat" messages get rendered as
+// CodexMonitor-style bubbles, everything else (tool calls, lifecycle events,
+// permission requests, notifications) stays as the compact event-card row.
 function renderEvent(evt) {
   if (seenIds.has(evt.eventId)) return;
   seenIds.add(evt.eventId);
@@ -55,6 +58,23 @@ function renderEvent(evt) {
   const empty = feed.querySelector('.empty-state');
   if (empty) empty.remove();
 
+  const eventName = evt.hook_event_name || 'Unknown';
+
+  if (eventName === 'UserPromptSubmit' && evt.prompt) {
+    renderChatBubble(evt, 'user');
+  } else if ((eventName === 'Stop' || eventName === 'StopFailure') && evt.last_assistant_message) {
+    renderChatBubble(evt, 'assistant');
+    maybeInsertTurnSeparator(evt);
+  } else {
+    renderCompactCard(evt);
+  }
+
+  totalEvents++;
+  countEl.textContent = totalEvents + ' events';
+  scheduleSidebarRebuild();
+}
+
+function renderCompactCard(evt) {
   const card = document.createElement('div');
   card.className = 'event-card' + (evt.isBlocking && !evt.decided ? ' blocking' : '') + (evt.decided ? ' decided' : '');
   card.id = 'evt-' + evt.eventId;
@@ -71,7 +91,6 @@ function renderEvent(evt) {
   const agentLabel = AGENT_NAMES[agent] || agent;
   const sc = statusClass(evt);
 
-  // Compact summary line
   const summary = buildSummary(evt, eventName);
 
   card.innerHTML = `
@@ -90,9 +109,151 @@ function renderEvent(evt) {
   `;
 
   feed.prepend(card);
-  totalEvents++;
-  countEl.textContent = totalEvents + ' events';
-  scheduleSidebarRebuild();
+}
+
+// CodexMonitor-style chat bubble for UserPromptSubmit + Stop events.
+// User messages are right-aligned + narrow, assistant messages are left-
+// aligned + wide, assistant content is rendered as markdown.
+function renderChatBubble(evt, role) {
+  const card = document.createElement('div');
+  card.className = 'event-card chat-bubble chat-bubble-' + role;
+  card.id = 'evt-' + evt.eventId;
+  card.dataset.eventId = evt.eventId;
+  card.dataset.sessionId = evt.session_id || '';
+  if (currentSessionFilter && card.dataset.sessionId !== currentSessionFilter) {
+    card.style.display = 'none';
+  }
+
+  const time = new Date(evt.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const agent = evt._agent || 'unknown';
+  const agentLabel = AGENT_NAMES[agent] || agent;
+
+  let contentHtml;
+  if (role === 'user') {
+    // User prompts are always plain text
+    contentHtml = `<p>${esc(evt.prompt).replace(/\n/g, '<br>')}</p>`;
+  } else {
+    // Assistant messages get markdown rendering via marked
+    const text = evt.last_assistant_message || '';
+    if (window.marked) {
+      try {
+        contentHtml = marked.parse(text, { breaks: true, gfm: true });
+      } catch (e) {
+        contentHtml = `<p>${esc(text).replace(/\n/g, '<br>')}</p>`;
+      }
+    } else {
+      contentHtml = `<p>${esc(text).replace(/\n/g, '<br>')}</p>`;
+    }
+  }
+
+  card.innerHTML = `
+    <div class="bubble-row">
+      <div class="bubble bubble-${role}">
+        <div class="bubble-content markdown">${contentHtml}</div>
+        <div class="bubble-meta">
+          ${role === 'assistant' ? `<span class="bubble-agent agent-badge agent-${agent}">${esc(agentLabel)}</span>` : ''}
+          <span class="bubble-time">${time}</span>
+        </div>
+        <button class="bubble-copy" title="Copy message" onclick="event.stopPropagation();copyBubble('${evt.eventId}', this)">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M2 9V3a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  `;
+
+  feed.prepend(card);
+  enhanceCodeBlocks(card);
+}
+
+// Append a copy button to every code block inside this card.
+function enhanceCodeBlocks(rootEl) {
+  rootEl.querySelectorAll('pre > code').forEach((code) => {
+    const pre = code.parentElement;
+    if (pre.parentElement && pre.parentElement.classList.contains('markdown-codeblock')) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'markdown-codeblock';
+
+    const header = document.createElement('div');
+    header.className = 'markdown-codeblock-header';
+    const langClass = [...code.classList].find((c) => c.startsWith('language-'));
+    const lang = langClass ? langClass.slice('language-'.length) : '';
+    header.innerHTML = `
+      <span class="markdown-codeblock-lang">${esc(lang || 'code')}</span>
+      <button class="markdown-codeblock-copy" onclick="event.stopPropagation();copyCodeBlock(this)">
+        <svg width="11" height="11" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="4" y="4" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M2 9V3a1 1 0 0 1 1-1h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+        copy
+      </button>
+    `;
+
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(header);
+    wrap.appendChild(pre);
+  });
+}
+
+function copyBubble(eventId, btn) {
+  const evt = allEvents.find((e) => e.eventId === eventId);
+  if (!evt) return;
+  const text = evt.prompt || evt.last_assistant_message || '';
+  navigator.clipboard.writeText(text).then(() => {
+    if (btn) {
+      btn.classList.add('is-copied');
+      setTimeout(() => btn.classList.remove('is-copied'), 1500);
+    }
+  });
+}
+
+function copyCodeBlock(btn) {
+  const code = btn.closest('.markdown-codeblock')?.querySelector('code');
+  if (!code) return;
+  navigator.clipboard.writeText(code.textContent || '').then(() => {
+    const label = btn.querySelector('svg')?.nextSibling;
+    btn.classList.add('is-copied');
+    setTimeout(() => btn.classList.remove('is-copied'), 1500);
+  });
+}
+
+// After each Stop/StopFailure bubble, insert a "—— Done in Xs ——" divider
+// marking the turn boundary. The divider is only visible in focused-session
+// view; in the global firehose it's hidden via CSS to avoid clutter.
+function maybeInsertTurnSeparator(stopEvt) {
+  // Walk backwards through the session's events to find the matching UserPromptSubmit
+  const sessionEvents = allEvents
+    .filter((e) => e.session_id === stopEvt.session_id)
+    .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt));
+  const stopIdx = sessionEvents.findIndex((e) => e.eventId === stopEvt.eventId);
+  let userEvt = null;
+  for (let i = stopIdx - 1; i >= 0; i--) {
+    if (sessionEvents[i].hook_event_name === 'UserPromptSubmit') {
+      userEvt = sessionEvents[i];
+      break;
+    }
+  }
+  if (!userEvt) return;
+
+  const durationMs = new Date(stopEvt.receivedAt) - new Date(userEvt.receivedAt);
+  const label = 'Done in ' + formatElapsed(durationMs);
+
+  const sep = document.createElement('div');
+  sep.className = 'turn-complete';
+  sep.dataset.sessionId = stopEvt.session_id || '';
+  sep.dataset.eventId = 'sep-' + stopEvt.eventId;
+  if (currentSessionFilter && sep.dataset.sessionId !== currentSessionFilter) {
+    sep.style.display = 'none';
+  }
+  sep.innerHTML = `
+    <span class="turn-complete-line"></span>
+    <span class="turn-complete-label">${esc(label)}</span>
+    <span class="turn-complete-line"></span>
+  `;
+  feed.prepend(sep);
 }
 
 // One-line summary for the collapsed row
@@ -676,37 +837,54 @@ function renderSessionHeader(session) {
   document.getElementById('session-header-cwd').textContent = session.cwd || '';
 }
 
-// Roasting-style status bar — pulsing dot, label, live elapsed time.
+// CodexMonitor "Working…" pill: spinner + live timer + shimmer label.
+// Three modes:
+//   - busy  → pill with spinning spinner and shimmer text (thinking / tool)
+//   - blocked → pill, amber dot, static label
+//   - idle → no pill, just a muted idle summary
 function renderSessionStatusBar(session) {
   const bar = document.getElementById('session-status-bar');
-  let dot, label, startTime;
+
   if (session.status === 'blocked') {
-    dot = 'blocked';
-    label = 'Waiting for approval';
-    startTime = null;
-  } else if (session.status === 'tool') {
-    dot = 'running';
-    label = `Running tool: ${session.currentTool}`;
-    startTime = session.runningToolStartedAt;
-  } else if (session.status === 'thinking') {
-    dot = 'running';
-    label = 'Thinking…';
-    startTime = session.thinkingStartedAt;
-  } else {
-    dot = 'idle';
-    const parts = [`${session.eventCount} events`];
-    if (session.tokens) {
-      const total = (session.tokens.input || 0) + (session.tokens.output || 0);
-      parts.push(`${total} tokens`);
-    }
-    label = `Idle · ${parts.join(' · ')}`;
-    startTime = null;
+    bar.innerHTML = `
+      <div class="working working-blocked">
+        <span class="session-status blocked"></span>
+        <span class="working-text-static">Waiting for approval</span>
+      </div>
+    `;
+    return;
   }
 
+  if (session.status === 'tool' || session.status === 'thinking') {
+    const startTime = session.status === 'tool'
+      ? session.runningToolStartedAt
+      : session.thinkingStartedAt;
+    const label = session.status === 'tool'
+      ? `Running ${session.currentTool}…`
+      : 'Thinking…';
+    bar.innerHTML = `
+      <div class="working">
+        <span class="working-spinner" aria-hidden></span>
+        <div class="working-timer">
+          <span class="working-timer-clock live-elapsed" data-start-time="${startTime}">0s</span>
+        </div>
+        <span class="working-text">${esc(label)}</span>
+      </div>
+    `;
+    return;
+  }
+
+  // Idle — render a muted summary only (no pill)
+  const parts = [`${session.eventCount} events`];
+  if (session.tokens) {
+    const total = (session.tokens.input || 0) + (session.tokens.output || 0);
+    parts.push(`${total} tokens`);
+  }
   bar.innerHTML = `
-    <span class="session-status ${dot}"></span>
-    <span class="status-label">${esc(label)}</span>
-    ${startTime ? `<span class="status-elapsed live-elapsed" data-start-time="${startTime}">0s</span>` : ''}
+    <div class="working-idle">
+      <span class="session-status idle"></span>
+      <span class="working-text-static">Idle · ${esc(parts.join(' · '))}</span>
+    </div>
   `;
 }
 
@@ -749,9 +927,13 @@ function selectSession(sessionId) {
   document.querySelectorAll('.session-item').forEach((el) => {
     el.classList.toggle('active', el.dataset.sessionId === sessionId);
   });
-  document.querySelectorAll('.event-card').forEach((card) => {
-    card.style.display = card.dataset.sessionId === sessionId ? '' : 'none';
+  // Filter both event cards AND turn separators by session
+  document.querySelectorAll('.event-card, .turn-complete').forEach((el) => {
+    el.style.display = el.dataset.sessionId === sessionId ? '' : 'none';
   });
+  // Flip feed to natural chat order (newest at bottom) when focused
+  feed.classList.add('session-focused');
+
   const session = buildSessionMap().find((s) => s.session_id === sessionId);
   if (session) {
     renderSessionHeader(session);
@@ -764,7 +946,8 @@ function selectSession(sessionId) {
 function showAllSessions() {
   currentSessionFilter = null;
   document.querySelectorAll('.session-item').forEach((el) => el.classList.remove('active'));
-  document.querySelectorAll('.event-card').forEach((card) => { card.style.display = ''; });
+  document.querySelectorAll('.event-card, .turn-complete').forEach((el) => { el.style.display = ''; });
+  feed.classList.remove('session-focused');
   sessionHeaderEl.style.display = 'none';
   document.getElementById('session-bottom').style.display = 'none';
 }
