@@ -2,10 +2,15 @@ const feed = document.getElementById('event-feed');
 const countEl = document.getElementById('event-count');
 const statusDot = document.getElementById('connection-status');
 const statusLabel = document.getElementById('connection-label');
+const sessionListEl = document.getElementById('session-list');
+const sessionCountEl = document.getElementById('session-count');
+const sessionHeaderEl = document.getElementById('session-header');
 
 let totalEvents = 0;
 const seenIds = new Set();
 const allEvents = []; // store all events for detail view
+let currentSessionFilter = null; // null means "show all"
+let sidebarRebuildQueued = false;
 
 const CIRCLE = '\u23FA';
 const AGENT_NAMES = {
@@ -54,6 +59,10 @@ function renderEvent(evt) {
   card.className = 'event-card' + (evt.isBlocking && !evt.decided ? ' blocking' : '') + (evt.decided ? ' decided' : '');
   card.id = 'evt-' + evt.eventId;
   card.dataset.eventId = evt.eventId;
+  card.dataset.sessionId = evt.session_id || '';
+  if (currentSessionFilter && card.dataset.sessionId !== currentSessionFilter) {
+    card.style.display = 'none';
+  }
 
   const time = new Date(evt.receivedAt).toLocaleTimeString();
   const sessionShort = (evt.session_id || '').substring(0, 8);
@@ -83,6 +92,7 @@ function renderEvent(evt) {
   feed.prepend(card);
   totalEvents++;
   countEl.textContent = totalEvents + ' events';
+  scheduleSidebarRebuild();
 }
 
 // One-line summary for the collapsed row
@@ -474,13 +484,222 @@ function truncate(s, n) {
   return s.length > n ? s.substring(0, n) + '…' : s;
 }
 
-// --- Init ---
+// =============================================================
+// Session sidebar — CodexMonitor-style session list in left column.
+// Derives sessions from allEvents (client-side) rather than hitting
+// /api/sessions, so the view stays live without extra polling.
+// =============================================================
+
+function scheduleSidebarRebuild() {
+  if (sidebarRebuildQueued) return;
+  sidebarRebuildQueued = true;
+  requestAnimationFrame(() => {
+    sidebarRebuildQueued = false;
+    rebuildSidebar();
+  });
+}
+
+function buildSessionMap() {
+  const bySession = {};
+  for (const evt of allEvents) {
+    const sid = evt.session_id;
+    if (!sid) continue;
+    let s = bySession[sid];
+    if (!s) {
+      s = bySession[sid] = {
+        session_id: sid,
+        _agent: evt._agent || 'unknown',
+        cwd: null,
+        model: null,
+        firstSeen: evt.receivedAt,
+        lastSeen: evt.receivedAt,
+        lastEventName: evt.hook_event_name,
+        lastContent: '',
+        eventCount: 0,
+        hasBlocking: false,
+      };
+    }
+    s.eventCount++;
+    if (evt._agent && evt._agent !== 'unknown') s._agent = evt._agent;
+    if (!s.cwd && evt.cwd) s.cwd = evt.cwd;
+    if (!s.cwd && evt.tool_input?.cwd) s.cwd = evt.tool_input.cwd;
+    if (!s.model && evt.model) s.model = evt.model;
+    if (new Date(evt.receivedAt) >= new Date(s.lastSeen)) {
+      s.lastSeen = evt.receivedAt;
+      s.lastEventName = evt.hook_event_name;
+    }
+    if (evt.hook_event_name === 'UserPromptSubmit' && evt.prompt) s.lastContent = evt.prompt;
+    if (evt.hook_event_name === 'Stop' && evt.last_assistant_message) s.lastContent = evt.last_assistant_message;
+    if (evt.isBlocking && !evt.decided) s.hasBlocking = true;
+  }
+  for (const s of Object.values(bySession)) {
+    if (s.hasBlocking) s.status = 'blocked';
+    else if (s.lastEventName === 'Stop' || s.lastEventName === 'SessionEnd') s.status = 'idle';
+    else s.status = 'running';
+  }
+  return Object.values(bySession).sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+}
+
+function relativeTime(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 5) return 'now';
+  if (diff < 60) return Math.floor(diff) + 's';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+  return Math.floor(diff / 86400) + 'd';
+}
+
+function rebuildSidebar() {
+  const sessions = buildSessionMap();
+  sessionCountEl.textContent = sessions.length;
+
+  if (sessions.length === 0) {
+    sessionListEl.innerHTML = '<div class="sidebar-empty">No sessions yet</div>';
+    return;
+  }
+
+  sessionListEl.innerHTML = '';
+  for (const s of sessions) {
+    const item = document.createElement('div');
+    item.className = 'session-item';
+    if (s.session_id === currentSessionFilter) item.classList.add('active');
+    item.dataset.sessionId = s.session_id;
+
+    const agentLabel = AGENT_NAMES[s._agent] || s._agent;
+    const sid = s.session_id.substring(0, 8);
+    const time = relativeTime(s.lastSeen);
+    const preview = s.lastContent || s.lastEventName || '';
+
+    item.innerHTML = `
+      <div class="session-row1">
+        <span class="session-status ${s.status}"></span>
+        <span class="agent-badge agent-${s._agent}">${esc(agentLabel)}</span>
+        <span class="session-id">${esc(sid)}</span>
+        <span class="session-time">${time}</span>
+      </div>
+      <div class="session-preview">${esc(truncate(preview, 60))}</div>
+    `;
+    item.onclick = () => selectSession(s.session_id);
+    sessionListEl.appendChild(item);
+  }
+}
+
+function selectSession(sessionId) {
+  currentSessionFilter = sessionId;
+  document.querySelectorAll('.session-item').forEach((el) => {
+    el.classList.toggle('active', el.dataset.sessionId === sessionId);
+  });
+  document.querySelectorAll('.event-card').forEach((card) => {
+    card.style.display = card.dataset.sessionId === sessionId ? '' : 'none';
+  });
+  const session = buildSessionMap().find((s) => s.session_id === sessionId);
+  if (session) {
+    sessionHeaderEl.style.display = 'flex';
+    document.getElementById('session-header-agent').textContent = AGENT_NAMES[session._agent] || session._agent;
+    document.getElementById('session-header-agent').className = 'session-header-agent agent-badge agent-' + session._agent;
+    document.getElementById('session-header-id').textContent = sessionId.substring(0, 12);
+    document.getElementById('session-header-cwd').textContent = session.cwd || '';
+  }
+}
+
+function showAllSessions() {
+  currentSessionFilter = null;
+  document.querySelectorAll('.session-item').forEach((el) => el.classList.remove('active'));
+  document.querySelectorAll('.event-card').forEach((card) => { card.style.display = ''; });
+  sessionHeaderEl.style.display = 'none';
+}
+
+// =============================================================
+// New Session modal — spawns an agent via POST /api/sessions/new
+// =============================================================
+
+let availableAgents = [];
+let selectedAgent = 'claude';
+
+async function loadAgents() {
+  try {
+    const res = await fetch('/api/agents');
+    availableAgents = await res.json();
+  } catch {
+    availableAgents = ['claude', 'codex', 'opencode', 'openclaw'];
+  }
+}
+
+function renderAgentPicker() {
+  const picker = document.getElementById('agent-picker');
+  picker.innerHTML = '';
+  for (const agent of availableAgents) {
+    const btn = document.createElement('div');
+    btn.className = 'agent-option' + (agent === selectedAgent ? ' selected' : '');
+    btn.onclick = () => {
+      selectedAgent = agent;
+      renderAgentPicker();
+    };
+    const label = AGENT_NAMES[agent] || agent;
+    btn.innerHTML = `
+      <span class="agent-badge agent-${agent}">${esc(label)}</span>
+      <span class="option-check">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+    `;
+    picker.appendChild(btn);
+  }
+}
+
+function openNewSessionModal() {
+  document.getElementById('new-session-overlay').style.display = 'flex';
+  document.getElementById('new-session-error').textContent = '';
+  renderAgentPicker();
+  setTimeout(() => document.getElementById('new-prompt').focus(), 50);
+}
+
+function closeNewSessionModal() {
+  document.getElementById('new-session-overlay').style.display = 'none';
+}
+
+async function submitNewSession() {
+  const prompt = document.getElementById('new-prompt').value.trim();
+  const cwd = document.getElementById('new-cwd').value.trim() || undefined;
+  const errEl = document.getElementById('new-session-error');
+  errEl.textContent = '';
+  if (!prompt) { errEl.textContent = 'Prompt cannot be empty'; return; }
+
+  const btn = document.getElementById('btn-spawn');
+  btn.classList.add('btn-loading');
+  try {
+    const res = await fetch('/api/sessions/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: selectedAgent, prompt, cwd }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      errEl.textContent = data.error || 'Failed to spawn agent';
+      btn.classList.remove('btn-loading');
+      return;
+    }
+    closeNewSessionModal();
+    document.getElementById('new-prompt').value = '';
+  } catch (e) {
+    errEl.textContent = String(e.message || e);
+  } finally {
+    btn.classList.remove('btn-loading');
+  }
+}
+
+// Refresh relative times every 30s
+setInterval(() => { if (allEvents.length > 0) scheduleSidebarRebuild(); }, 30000);
+
+// =============================================================
+// Init
+// =============================================================
 feed.innerHTML = `
   <div class="empty-state">
     <div class="logo">${CIRCLE}</div>
     <h2>Waiting for events…</h2>
-    <p>Start a Claude Code session with hooks installed.</p>
+    <p>Start a new session, or install hooks on an agent to see events stream in.</p>
   </div>
 `;
 
+loadAgents();
 connect();

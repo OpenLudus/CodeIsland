@@ -2,9 +2,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
+const os = require('os');
 
 const PORT = process.env.PORT || 3456;
 const MAX_EVENTS = 1000;
+const LOG_DIR = process.env.DASHBOARD_LOG_DIR || path.join(os.tmpdir(), 'openludus-dashboard-runs');
+try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
 
 // In-memory state
 const events = [];
@@ -75,6 +79,89 @@ function isBlocking(evt) {
   return false;
 }
 
+// --- Session aggregation ---
+// Derive a session list from the raw event log. Groups events by session_id
+// and computes per-session metadata used by the sidebar.
+function getSessions() {
+  const bySession = {};
+  for (const evt of events) {
+    const sid = evt.session_id;
+    if (!sid) continue;
+    let s = bySession[sid];
+    if (!s) {
+      s = bySession[sid] = {
+        session_id: sid,
+        _agent: evt._agent || 'unknown',
+        cwd: null,
+        model: null,
+        firstSeen: evt.receivedAt,
+        lastSeen: evt.receivedAt,
+        lastEventName: evt.hook_event_name,
+        lastContent: '',
+        eventCount: 0,
+        hasBlocking: false,
+        status: 'running',
+      };
+    }
+    s.eventCount++;
+    if (evt._agent && evt._agent !== 'unknown') s._agent = evt._agent;
+    if (evt.cwd && !s.cwd) s.cwd = evt.cwd;
+    if (evt.tool_input?.cwd && !s.cwd) s.cwd = evt.tool_input.cwd;
+    if (evt.model && !s.model) s.model = evt.model;
+    if (new Date(evt.receivedAt) >= new Date(s.lastSeen)) {
+      s.lastSeen = evt.receivedAt;
+      s.lastEventName = evt.hook_event_name;
+    }
+    if (evt.hook_event_name === 'UserPromptSubmit' && evt.prompt) s.lastContent = evt.prompt;
+    if (evt.hook_event_name === 'Stop' && evt.last_assistant_message) s.lastContent = evt.last_assistant_message;
+    if (evt.isBlocking && !evt.decided) s.hasBlocking = true;
+  }
+  const list = Object.values(bySession);
+  for (const s of list) {
+    if (s.hasBlocking) s.status = 'blocked';
+    else if (s.lastEventName === 'Stop' || s.lastEventName === 'SessionEnd') s.status = 'idle';
+    else s.status = 'running';
+  }
+  list.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+  return list;
+}
+
+// --- Agent spawn registry ---
+// Whitelist of runnable agents. Keeps spawn surface tight: caller supplies
+// agent name + prompt + cwd; server builds the argv from this table.
+// Claude Code refuses --dangerously-skip-permissions when running as root (common
+// on servers). Permission approvals flow through our PermissionRequest hook → the
+// dashboard UI, so we can run without that flag. If the agent tries a tool and no
+// one approves in the UI, it hangs until someone does.
+const AGENT_SPAWNERS = {
+  claude: (prompt) => ({ cmd: 'claude', args: ['-p', prompt] }),
+  codex:  (prompt) => ({ cmd: 'codex',  args: ['exec', prompt, '--dangerously-bypass-approvals-and-sandbox'] }),
+  opencode: (prompt) => ({ cmd: 'opencode-dashboard', args: [prompt] }),
+  openclaw: (prompt) => ({ cmd: 'openclaw-dashboard', args: [prompt] }),
+};
+
+function spawnAgent({ agent, prompt, cwd }) {
+  const builder = AGENT_SPAWNERS[agent];
+  if (!builder) throw new Error(`unknown agent: ${agent}`);
+  if (!prompt || typeof prompt !== 'string') throw new Error('missing prompt');
+  const workDir = (cwd && typeof cwd === 'string' && cwd.length > 0) ? cwd : (process.env.HOME || '/tmp');
+  const { cmd, args } = builder(prompt);
+
+  const runId = crypto.randomUUID().slice(0, 8);
+  const logPath = path.join(LOG_DIR, `${agent}-${runId}.log`);
+  const out = fs.openSync(logPath, 'a');
+  const err = fs.openSync(logPath, 'a');
+
+  const child = spawn(cmd, args, {
+    cwd: workDir,
+    detached: true,
+    stdio: ['ignore', out, err],
+    env: { ...process.env, CLAUDE_DASHBOARD_URL: `http://localhost:${PORT}` },
+  });
+  child.unref();
+  return { pid: child.pid, logPath, runId, cmd, args, cwd: workDir };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
@@ -128,6 +215,31 @@ const server = http.createServer(async (req, res) => {
   // GET /api/events — return all stored events
   if (req.method === 'GET' && pathname === '/api/events') {
     json(res, 200, events);
+    return;
+  }
+
+  // GET /api/sessions — grouped session list derived from events
+  if (req.method === 'GET' && pathname === '/api/sessions') {
+    json(res, 200, getSessions());
+    return;
+  }
+
+  // POST /api/sessions/new — spawn a new agent session with an initial prompt
+  if (req.method === 'POST' && pathname === '/api/sessions/new') {
+    try {
+      const body = await readBody(req);
+      const { agent, prompt, cwd } = JSON.parse(body);
+      const info = spawnAgent({ agent, prompt, cwd });
+      json(res, 200, { ok: true, ...info });
+    } catch (e) {
+      json(res, 400, { error: String(e.message || e) });
+    }
+    return;
+  }
+
+  // GET /api/agents — list whitelisted spawnable agents
+  if (req.method === 'GET' && pathname === '/api/agents') {
+    json(res, 200, Object.keys(AGENT_SPAWNERS));
     return;
   }
 
