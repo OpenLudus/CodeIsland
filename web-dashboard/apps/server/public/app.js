@@ -104,10 +104,10 @@ function renderEvent(evt) {
 
 // Minimal CodexMonitor-style tool inline row, cross-agent aligned via
 // tool-taxonomy.js. All four supported agents (Claude Code / Codex / OpenCode
-// / Hermes) collapse onto a shared set of 13 semantic categories. The row
-// shows the canonical label for its category (e.g. "Shell" for every Bash
-// / exec_command / bash / terminal variant) with the raw tool_name exposed
-// only as a hover tooltip.
+// / Hermes) collapse onto a shared set of 12 semantic categories + unknown.
+// The row shows the canonical label for its category (e.g. "Shell" for every
+// Bash / exec_command / bash / terminal variant) with the raw tool_name
+// exposed only as a hover tooltip and inside the expanded detail panel.
 function renderToolRow(evt, status) {
   const category = window.ToolTaxonomy.classifyTool(evt.tool_name, evt._agent);
   const normalized = window.ToolTaxonomy.normalizeToolInput(
@@ -137,7 +137,7 @@ function renderToolRow(evt, status) {
       <span class="${valueClass}">${esc(normalized.displayValue || '')}</span>
     </div>
     <div class="card-detail" id="detail-${evt.eventId}" style="display:none">
-      ${buildDetail(evt, evt.hook_event_name)}
+      ${buildToolRowDetail(evt, category)}
     </div>
   `;
 
@@ -149,19 +149,223 @@ function renderToolRow(evt, status) {
 }
 
 // Flip an open tool row from "running" to "completed" or "failed" and
-// stitch in the output (so the detail panel gets the PostToolUse data).
+// stitch in the PostToolUse payload. Also re-render the detail panel so
+// the user sees freshly-arrived output without having to close+reopen.
 // Category class stays the same — same tool, same semantic category.
+// IMPORTANT: update BOTH the card.id AND the detail's id when we bump
+// to postEvt.eventId, otherwise toggleExpand's getElementById lookup
+// for the detail panel fails silently.
 function updateToolRow(card, postEvt, status) {
   card.classList.remove('tool-row-running');
   card.classList.add('tool-row-' + status);
+
+  const category = window.ToolTaxonomy.classifyTool(postEvt.tool_name, postEvt._agent);
+
   const detail = card.querySelector('.card-detail');
   if (detail) {
-    detail.innerHTML = buildDetail(postEvt, postEvt.hook_event_name);
+    detail.innerHTML = buildToolRowDetail(postEvt, category);
+    detail.id = 'detail-' + postEvt.eventId;
   }
   card.dataset.eventId = postEvt.eventId;
   card.id = 'evt-' + postEvt.eventId;
   const line = card.querySelector('.tool-row-line');
   if (line) line.setAttribute('onclick', `toggleExpand('${postEvt.eventId}')`);
+}
+
+// ─── Specialized detail renderers per category ─────────────────────────
+// Categories with their own renderer: shell, todo, edit.
+// Everything else falls through to the generic buildDetail() used by
+// compact lifecycle cards, which already handles tool_input / tool_response
+// / error / raw JSON.
+function buildToolRowDetail(evt, category) {
+  let html = '';
+  switch (category) {
+    case 'shell':
+      html = renderShellDetail(evt);
+      break;
+    case 'todo':
+      html = renderTodoDetail(evt);
+      break;
+    case 'edit':
+      html = renderEditDetail(evt);
+      break;
+    default:
+      return buildDetail(evt, evt.hook_event_name);
+  }
+  // All specialized renderers still expose a "view raw JSON" fallback
+  // so power users can inspect the full event when the curated view is
+  // insufficient.
+  html += `<button class="toggle-btn" onclick="event.stopPropagation();showRaw('${evt.eventId}')" style="margin-top:8px">View raw JSON</button>`;
+  return html;
+}
+
+function extractShellOutput(resp) {
+  if (resp == null) return '';
+  if (typeof resp === 'string') return resp;
+  if (typeof resp === 'object') {
+    return (
+      resp.output ||
+      resp.stdout ||
+      resp.content ||
+      resp.result ||
+      resp.aggregated_output ||
+      JSON.stringify(resp, null, 2)
+    );
+  }
+  return String(resp);
+}
+
+function renderShellDetail(evt) {
+  const input = evt.tool_input || {};
+  const cmdRaw = input.command || input.cmd || input.script || input.code || '';
+  const cmd = Array.isArray(cmdRaw) ? cmdRaw.join(' ') : cmdRaw;
+  const cwd = input.cwd || input.workdir || input.directory || '';
+  const desc = input.description;
+  let html = '';
+  if (desc) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Description</div>
+      <div class="lifecycle-info">${esc(desc)}</div>
+    </div>`;
+  }
+  html += `<div class="detail-section">
+    <div class="detail-label">Command${cwd ? ' <span class="detail-label-muted">in ' + esc(cwd) + '</span>' : ''}</div>
+    <pre class="detail-shell-command">${esc(cmd)}</pre>
+  </div>`;
+  if (evt.tool_response !== undefined && evt.tool_response !== null) {
+    const out = extractShellOutput(evt.tool_response);
+    if (out) {
+      html += `<div class="detail-section">
+        <div class="detail-label">Output</div>
+        <pre class="detail-shell-output">${esc(out)}</pre>
+      </div>`;
+    }
+  }
+  if (evt.error) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Error</div>
+      <pre class="detail-edit-removed">${esc(String(evt.error))}</pre>
+    </div>`;
+  }
+  return html;
+}
+
+function renderTodoDetail(evt) {
+  const todos = Array.isArray(evt.tool_input && evt.tool_input.todos)
+    ? evt.tool_input.todos
+    : [];
+  if (todos.length === 0) {
+    return '<div class="lifecycle-info">(empty todo list)</div>';
+  }
+  const done = todos.filter((t) => t && t.status === 'completed').length;
+  let html = `<div class="detail-section">
+    <div class="detail-label">Checklist (${done}/${todos.length} complete)</div>
+    <div class="detail-todo-list">`;
+  for (const t of todos) {
+    if (!t) continue;
+    const status = t.status || 'pending';
+    const icon = status === 'completed' ? '✓' : status === 'in_progress' ? '⋯' : '○';
+    const text =
+      status === 'in_progress' && t.activeForm ? t.activeForm : t.content || '';
+    html += `<div class="detail-todo-item todo-${status}">
+      <span class="detail-todo-check">${icon}</span>
+      <span class="detail-todo-text">${esc(text)}</span>
+    </div>`;
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function renderEditDetail(evt) {
+  const input = evt.tool_input || {};
+  const tool = evt.tool_name || '';
+
+  // ── Codex apply_patch: freeform lark grammar in input.input ──
+  if (tool === 'apply_patch' && typeof input.input === 'string') {
+    const files = window.ToolTaxonomy.parsePatchFiles(input.input);
+    let html = '';
+    if (files.length > 0) {
+      html += `<div class="detail-section">
+        <div class="detail-label">Files changed (${files.length})</div>
+        <div class="detail-patch-files">`;
+      for (const f of files) {
+        const mark = f.kind === 'Add' ? '+' : f.kind === 'Delete' ? '−' : '~';
+        html += `<div class="detail-patch-file patch-${f.kind.toLowerCase()}">
+          <span class="detail-patch-kind">${mark}</span>
+          <span class="detail-patch-path mono">${esc(f.path)}</span>
+        </div>`;
+      }
+      html += '</div></div>';
+    }
+    html += `<div class="detail-section">
+      <div class="detail-label">Patch body</div>
+      <pre class="detail-shell-output">${esc(input.input)}</pre>
+    </div>`;
+    return html;
+  }
+
+  // ── OpenCode apply_patch / Hermes patch: unified diff in input.patch/diff ──
+  const unifiedPatch = input.patch || input.diff || input.unified_diff;
+  if (typeof unifiedPatch === 'string') {
+    const files = window.ToolTaxonomy.parsePatchFiles(unifiedPatch);
+    let html = '';
+    if (files.length > 0) {
+      html += `<div class="detail-section">
+        <div class="detail-label">Files changed (${files.length})</div>
+        <div class="detail-patch-files">`;
+      for (const f of files) {
+        html += `<div class="detail-patch-file patch-update">
+          <span class="detail-patch-kind">~</span>
+          <span class="detail-patch-path mono">${esc(f.path)}</span>
+        </div>`;
+      }
+      html += '</div></div>';
+    }
+    html += `<div class="detail-section">
+      <div class="detail-label">Diff</div>
+      <pre class="detail-shell-output">${esc(unifiedPatch)}</pre>
+    </div>`;
+    return html;
+  }
+
+  // ── Claude MultiEdit: file_path + edits[] ──
+  if (Array.isArray(input.edits)) {
+    const fp = input.file_path || input.filePath || input.path || '';
+    let html = `<div class="detail-section">
+      <div class="detail-label">File</div>
+      <pre class="detail-shell-command">${esc(fp)}</pre>
+    </div>`;
+    html += `<div class="detail-section">
+      <div class="detail-label">Edits (${input.edits.length})</div>`;
+    for (const e of input.edits) {
+      html += `<div class="detail-multiedit-item">
+        <pre class="detail-edit-removed">${esc((e && e.old_string) || '')}</pre>
+        <pre class="detail-edit-added">${esc((e && e.new_string) || '')}</pre>
+      </div>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // ── Claude Edit / NotebookEdit: file_path + old_string + new_string ──
+  const fp = input.file_path || input.filePath || input.path || '';
+  let html = `<div class="detail-section">
+    <div class="detail-label">File</div>
+    <pre class="detail-shell-command">${esc(fp)}</pre>
+  </div>`;
+  if (input.old_string !== undefined) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Removed</div>
+      <pre class="detail-edit-removed">${esc(input.old_string || '')}</pre>
+    </div>`;
+  }
+  if (input.new_string !== undefined) {
+    html += `<div class="detail-section">
+      <div class="detail-label">Added</div>
+      <pre class="detail-edit-added">${esc(input.new_string || '')}</pre>
+    </div>`;
+  }
+  return html;
 }
 
 function renderCompactCard(evt) {
@@ -581,18 +785,23 @@ function buildDetail(evt, eventName) {
 }
 
 // --- Toggle expand/collapse ---
+// Tool rows don't have an .expand-arrow (they're minimal ● Tool · value
+// rows), so the null-check on `arrow` matters — before this, clicking a
+// tool row crashed with "Cannot set properties of null".
 function toggleExpand(eventId) {
   const detail = document.getElementById('detail-' + eventId);
   const card = document.getElementById('evt-' + eventId);
+  if (!detail || !card) return;
   const arrow = card.querySelector('.expand-arrow');
-  if (detail.style.display === 'none') {
+  const isClosed = detail.style.display === 'none' || !detail.style.display;
+  if (isClosed) {
     detail.style.display = 'block';
     card.classList.add('expanded');
-    arrow.innerHTML = '&#x25BC;';
+    if (arrow) arrow.innerHTML = '&#x25BC;';
   } else {
     detail.style.display = 'none';
     card.classList.remove('expanded');
-    arrow.innerHTML = '&#x25B6;';
+    if (arrow) arrow.innerHTML = '&#x25B6;';
   }
 }
 

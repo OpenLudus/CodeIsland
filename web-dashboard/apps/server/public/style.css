@@ -841,18 +841,31 @@ header {
 .tool-row.tool-row-question .tool-row-icon { background: var(--cat-question); }
 .tool-row.tool-row-message  .tool-row-icon { background: var(--cat-message); }
 .tool-row.tool-row-mcp      .tool-row-icon { background: var(--cat-mcp); }
-.tool-row.tool-row-unknown  .tool-row-icon { background: var(--cat-unknown); }
+
+/* Unknown → HOLLOW circle (border only, no fill). This is deliberately
+   different from Todo's solid gray dot so users can tell "we couldn't
+   classify this" apart from "this is a todo entry". */
+.tool-row.tool-row-unknown .tool-row-icon {
+  background: transparent;
+  border: 1px solid var(--cat-unknown);
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+}
 
 /* ── Status overrides (running / failed win over category color) ──
    Written AFTER category rules so CSS cascade resolves to status at
-   equal specificity. */
+   equal specificity. Also explicitly reset border/box-sizing so the
+   unknown-hollow style (border only) gets filled back in for running. */
 .tool-row.tool-row-running .tool-row-icon {
   background: var(--warning);
+  border: none;
   box-shadow: 0 0 6px rgba(215,140,60,0.45);
   animation: tool-pulse 1.1s ease-in-out infinite;
 }
 .tool-row.tool-row-failed .tool-row-icon {
   background: var(--error);
+  border: none;
   box-shadow: 0 0 5px rgba(171,43,63,0.4);
 }
 @keyframes tool-pulse {
@@ -1430,4 +1443,159 @@ header {
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ============================================
+   Specialized tool-row detail renderers
+   (shell output / todo checklist / patch summary / edit diff)
+   ============================================ */
+
+/* Shell command block — mono with category-colored left stripe */
+.detail-shell-command {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+  font-size: 11px;
+  background: var(--bg-tool);
+  border-left: 2px solid var(--cat-shell);
+  padding: 6px 10px;
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-radius: 0 4px 4px 0;
+}
+.detail-label-muted {
+  color: var(--text-dim);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 9px;
+}
+
+/* Shell output block — a bit more prominent, capped for long runs */
+.detail-shell-output {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  margin: 0;
+  color: var(--text);
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-radius: 4px;
+  line-height: 1.45;
+}
+
+/* Todo checklist — vertical list with colored status glyphs */
+.detail-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+.detail-todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.detail-todo-check {
+  width: 14px;
+  font-family: 'JetBrains Mono', monospace;
+  flex-shrink: 0;
+  font-size: 12px;
+  text-align: center;
+  font-weight: 700;
+}
+.detail-todo-item.todo-completed .detail-todo-check   { color: var(--success); }
+.detail-todo-item.todo-in_progress .detail-todo-check {
+  color: var(--warning);
+  animation: tool-pulse 1.2s ease-in-out infinite;
+}
+.detail-todo-item.todo-pending .detail-todo-check     { color: var(--text-dim); }
+
+.detail-todo-item.todo-completed .detail-todo-text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: rgba(255,255,255,0.18);
+}
+.detail-todo-item.todo-in_progress .detail-todo-text { color: var(--text-bright); font-weight: 500; }
+.detail-todo-item.todo-pending .detail-todo-text     { color: var(--text); }
+.detail-todo-text { flex: 1; }
+
+/* Patch / edit file summary — one row per changed file */
+.detail-patch-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.detail-patch-file {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 3px;
+  background: var(--bg-tool);
+}
+.detail-patch-kind {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.detail-patch-file.patch-add    .detail-patch-kind { color: var(--success); }
+.detail-patch-file.patch-delete .detail-patch-kind { color: var(--error); }
+.detail-patch-file.patch-update .detail-patch-kind { color: var(--cat-edit); }
+.detail-patch-path {
+  color: var(--text);
+  word-break: break-all;
+  font-size: 11px;
+}
+
+/* Edit removed / added diff blocks */
+.detail-edit-removed {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: rgba(171,43,63,0.08);
+  border-left: 2px solid var(--error);
+  padding: 6px 10px;
+  color: rgb(255,170,170);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  border-radius: 0 4px 4px 0;
+  max-height: 200px;
+  overflow: auto;
+  line-height: 1.45;
+}
+.detail-edit-added {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: rgba(44,122,57,0.08);
+  border-left: 2px solid var(--success);
+  padding: 6px 10px;
+  color: rgb(170,220,180);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 4px 0 0 0;
+  border-radius: 0 4px 4px 0;
+  max-height: 200px;
+  overflow: auto;
+  line-height: 1.45;
+}
+.detail-multiedit-item {
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.detail-multiedit-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }

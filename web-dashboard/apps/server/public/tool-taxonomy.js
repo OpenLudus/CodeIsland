@@ -1,15 +1,21 @@
 // tool-taxonomy.js
 //
 // Single source of truth for cross-agent tool rendering.
+// Final count: 12 semantic categories + 'unknown' fallback.
 //
-// Research basis (all read from official sources, not Paseo's re-interpretation):
+// Research basis (all read from official sources):
 //   - Claude Code:  cc-recovered-main/src/tools/* (40+ builtin tools)
-//   - Codex:        codex-rs/tools/src/*          (apply_patch-centric)
+//   - Codex:        codex-rs/tools/src/*          (apply_patch merged into edit)
 //   - OpenCode:     opencode-official/packages/opencode/src/tool/*.ts
 //   - Hermes:       hermes-official/tools/*       (cross-platform gateway)
 //
+// The 12 categories: shell, read, write, edit, search, fetch, todo, plan,
+// subagent, question, message, mcp. apply_patch is NOT its own category —
+// it's a transport form, not a distinct user semantic; Codex apply_patch,
+// OpenCode apply_patch, and Hermes patch all classify as 'edit'.
+//
 // Responsibilities:
-//   1. classifyTool(toolName, agent)  — map any agent's tool name to 1 of 13
+//   1. classifyTool(toolName, agent)  — map any agent's tool name to 1 of 12
 //      canonical semantic categories (+ 'unknown' fallback).
 //   2. normalizeToolInput(category, toolName, input)  — extract a clean
 //      display value from whatever the agent's tool_input shape happens to be.
@@ -254,11 +260,7 @@
 
       case 'write': {
         const fp = input.file_path || input.filePath || input.path;
-        const size = typeof input.content === 'string' ? input.content.length : null;
-        return {
-          displayValue: fp ? (size ? `${fp} (${size}B)` : fp) : '',
-          mono: true,
-        };
+        return { displayValue: fp || '', mono: true };
       }
 
       case 'edit': {
@@ -297,13 +299,19 @@
       }
 
       case 'search': {
+        // Distinguish "filename-glob" tools (Glob) from "content/regex" tools
+        // (Grep, codesearch, WebSearch-ish). Glob patterns are shell-style and
+        // self-explanatory; quoting them looks weird. Regex / free-text queries
+        // read better with quotes for visual separation from the "in <path>"
+        // suffix.
+        const isGlobStyle = toolName === 'Glob' || toolName === 'glob';
         const q = input.pattern || input.query || input.q;
         const p = input.path;
-        const glob = input.glob;
+        const g = input.glob;
         const parts = [];
-        if (q) parts.push('"' + q + '"');
-        if (p) parts.push('in ' + basename(p));
-        if (glob) parts.push('(' + glob + ')');
+        if (q) parts.push(isGlobStyle ? q : '"' + q + '"');
+        if (p) parts.push('in ' + p);          // full path, NOT basename
+        if (g) parts.push('(' + g + ')');
         return { displayValue: parts.join(' '), mono: false };
       }
 
