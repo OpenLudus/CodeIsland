@@ -130,12 +130,22 @@ function getSessions() {
 // --- Agent spawn registry ---
 // Whitelist of runnable agents. Keeps spawn surface tight: caller supplies
 // agent name + prompt + cwd; server builds the argv from this table.
-// Claude Code refuses --dangerously-skip-permissions when running as root (common
-// on servers). Permission approvals flow through our PermissionRequest hook → the
-// dashboard UI, so we can run without that flag. If the agent tries a tool and no
-// one approves in the UI, it hangs until someone does.
+//
+// Claude permission story under root:
+// - --dangerously-skip-permissions is rejected by Claude when uid=0 (root),
+//   which is common on servers, so we can't use it.
+// - In `claude -p` (print mode), the default permission resolver auto-DENIES
+//   any tool that would normally prompt — and crucially it does NOT fire the
+//   PermissionRequest hook in print mode, so our dashboard never sees them.
+// - Workaround: pre-whitelist common safe tools via --allowedTools. The flag
+//   syntax requires the prompt as a positional BEFORE the flag (otherwise the
+//   variadic --allowedTools eats the prompt).
+const CLAUDE_DEFAULT_ALLOWED_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'];
 const AGENT_SPAWNERS = {
-  claude: (prompt) => ({ cmd: 'claude', args: ['-p', prompt] }),
+  claude: (prompt) => ({
+    cmd: 'claude',
+    args: ['-p', prompt, '--allowedTools', ...CLAUDE_DEFAULT_ALLOWED_TOOLS],
+  }),
   codex:  (prompt) => ({ cmd: 'codex',  args: ['exec', prompt, '--dangerously-bypass-approvals-and-sandbox'] }),
   opencode: (prompt) => ({ cmd: 'opencode-dashboard', args: [prompt] }),
   openclaw: (prompt) => ({ cmd: 'openclaw-dashboard', args: [prompt] }),
@@ -148,7 +158,10 @@ const AGENT_SPAWNERS = {
 // the new turn with the old one. OpenCode and Codex would need wrapper changes
 // to honor a passed-in session id.
 const RESUME_SPAWNERS = {
-  claude: (sessionId, prompt) => ({ cmd: 'claude', args: ['-p', '--resume', sessionId, prompt] }),
+  claude: (sessionId, prompt) => ({
+    cmd: 'claude',
+    args: ['-p', prompt, '--resume', sessionId, '--allowedTools', ...CLAUDE_DEFAULT_ALLOWED_TOOLS],
+  }),
 };
 
 function spawnDetached({ cmd, args, cwd, label }) {
