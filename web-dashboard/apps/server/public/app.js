@@ -137,9 +137,14 @@ function renderToolRow(evt, status) {
   if (normalized.pill) valueClasses.push('tool-row-pill');
   const valueClass = valueClasses.join(' ');
 
+  // Hugeicons glyph for the category — falls back to 'unknown' circle if the
+  // category is out of range. Color comes from CSS `color: currentColor` on
+  // the enclosing .tool-row-icon span.
+  const iconSvg = (window.Icons && window.Icons.render(category)) || '';
+
   card.innerHTML = `
     <div class="tool-row-line" onclick="toggleExpand('${evt.eventId}')">
-      <span class="tool-row-icon"></span>
+      <span class="tool-row-icon">${iconSvg}</span>
       <span class="tool-row-name" title="${esc(evt.tool_name || '')}">${esc(canonicalLabel)}</span>
       <span class="${valueClass}">${esc(normalized.displayValue || '')}</span>
     </div>
